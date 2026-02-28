@@ -1,0 +1,30 @@
+{
+  "name": "aviator-backend",
+  "version": "1.0.0",
+  "description": "Aviator Game Backend",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "create-admin": "node src/scripts/createAdmin.js",
+    "clear-game-rounds": "node src/scripts/clearGameRounds.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.9.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.0.3",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^8.0.1",
+    "sharp": "^0.34.5",
+    "socket.io": "^4.6.1",
+    "twilio": "^5.12.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
