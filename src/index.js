@@ -24,10 +24,17 @@ const { startNotificationCron } = require('./services/notificationCron');
 const app = express();
 const server = http.createServer(app);
 
+// Allowed origins from env (comma-separated) + local defaults
+const allowedOrigins = [
+  'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175',
+  'http://localhost:5176', 'http://localhost:5177', 'http://localhost:3000',
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : []),
+];
+
 // Socket.io setup
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176', 'http://localhost:5177', 'http://localhost:3000'],
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
   }
 });
@@ -36,7 +43,7 @@ const io = new Server(server, {
 connectDB();
 
 // Middleware
-app.use(cors());
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
