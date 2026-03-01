@@ -14,6 +14,7 @@ const {
   getWalletRequests,
   processWalletRequest,
   getAllBets,
+  deleteBets,
   getWinningBets,
   getAdminNotifications,
   forceCrashBet,
@@ -22,6 +23,11 @@ const {
   forceCrashRound,
   setNextCrash,
   clearNextCrash,
+  setBulkCrash,
+  clearBulkCrash,
+  setSequentialCrashes,
+  clearSequentialCrashes,
+  getCrashQueue,
   getSpinnerRecords,
   getSettings,
   updateSettings,
@@ -35,6 +41,7 @@ const {
   approveLudoResultRequest,
   rejectLudoResultRequest,
   updateLudoMatchStatus,
+  bulkDeleteLudoMatches,
 } = require('../controllers/adminLudoController');
 const { protect, adminOnly, fullAdminOnly } = require('../middleware/auth');
 const upload = require('../middleware/upload');
@@ -56,12 +63,18 @@ router.delete('/users/:id', fullAdminOnly, deleteUser);
 router.get('/wallet-requests', getWalletRequests);
 router.put('/wallet-requests/:id', processWalletRequest);
 router.get('/bets', getAllBets);
+router.post('/bets/delete', fullAdminOnly, deleteBets);
 router.get('/bets/live', getLiveBets);
 router.post('/bets/:id/force-crash', forceCrashBet);
 router.get('/game/current-round', getCurrentRoundWithBets);
 router.post('/game/force-crash-round', forceCrashRound);
 router.post('/game/set-next-crash', fullAdminOnly, setNextCrash);
 router.post('/game/clear-next-crash', fullAdminOnly, clearNextCrash);
+router.post('/game/set-bulk-crash', fullAdminOnly, setBulkCrash);
+router.post('/game/clear-bulk-crash', fullAdminOnly, clearBulkCrash);
+router.post('/game/set-sequential-crashes', fullAdminOnly, setSequentialCrashes);
+router.post('/game/clear-sequential-crashes', fullAdminOnly, clearSequentialCrashes);
+router.get('/game/crash-queue', getCrashQueue);
 router.get('/wins-bets', getWinningBets);
 router.get('/notifications', getAdminNotifications);
 router.get('/spinner-records', getSpinnerRecords);
@@ -72,6 +85,7 @@ router.get('/bonus-records', getBonusRecords);
 
 // Ludo (separate section)
 router.get('/ludo/matches', getAllLudoMatches);
+router.post('/ludo/matches/bulk-delete', fullAdminOnly, bulkDeleteLudoMatches);
 router.get('/ludo/matches/:id', getLudoMatchDetail);
 router.put('/ludo/matches/:id/status', updateLudoMatchStatus);
 router.get('/ludo/result-requests', getLudoResultRequests);

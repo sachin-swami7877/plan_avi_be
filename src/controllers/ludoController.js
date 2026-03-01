@@ -17,6 +17,13 @@ const ROOM_CODE_EXPIRY_MINUTES = 4;
 // @route   POST /api/ludo/create
 const createMatch = async (req, res) => {
   try {
+    // Check if Ludo is enabled
+    const adminSettings = await AdminSettings.findOne({ key: 'main' });
+    if (adminSettings && adminSettings.ludoEnabled === false) {
+      const reason = adminSettings.ludoDisableReason || 'Ludo games are currently disabled.';
+      return res.status(403).json({ message: reason });
+    }
+
     const { entryAmount } = req.body;
     const amount = Number(entryAmount);
 
@@ -27,20 +34,6 @@ const createMatch = async (req, res) => {
     const user = await User.findById(req.user._id);
     if (user.walletBalance < amount) {
       return res.status(400).json({ message: 'Insufficient balance' });
-    }
-
-    // Exclude live matches that already have a result request (game is effectively over)
-    const matchIdsWithResult = await LudoResultRequest.find({}).distinct('matchId');
-    const activeQuery = {
-      $or: [{ creatorId: req.user._id }, { 'players.userId': req.user._id }],
-      status: { $in: ['waiting', 'live'] },
-    };
-    if (matchIdsWithResult.length > 0) {
-      activeQuery._id = { $nin: matchIdsWithResult };
-    }
-    const hasActive = await LudoMatch.findOne(activeQuery);
-    if (hasActive) {
-      return res.status(400).json({ message: 'You already have an active match. Finish it before creating a new one.' });
     }
 
     const joinExpiryAt = new Date(Date.now() + WAITING_EXPIRY_MINUTES * 60 * 1000);
@@ -144,6 +137,13 @@ const submitRoomCode = async (req, res) => {
 // @route   POST /api/ludo/join
 const joinMatch = async (req, res) => {
   try {
+    // Check if Ludo is enabled
+    const adminSettings = await AdminSettings.findOne({ key: 'main' });
+    if (adminSettings && adminSettings.ludoEnabled === false) {
+      const reason = adminSettings.ludoDisableReason || 'Ludo games are currently disabled.';
+      return res.status(403).json({ message: reason });
+    }
+
     const { matchId } = req.body;
     if (!matchId) {
       return res.status(400).json({ message: 'Match ID is required' });
@@ -165,20 +165,6 @@ const joinMatch = async (req, res) => {
     }
     if (match.players.length >= MAX_PLAYERS) {
       return res.status(400).json({ message: 'This game has been taken by another person.' });
-    }
-
-    // Exclude live matches that already have a result request (game is effectively over)
-    const matchIdsWithResult2 = await LudoResultRequest.find({}).distinct('matchId');
-    const activeQuery2 = {
-      $or: [{ creatorId: req.user._id }, { 'players.userId': req.user._id }],
-      status: { $in: ['waiting', 'live'] },
-    };
-    if (matchIdsWithResult2.length > 0) {
-      activeQuery2._id = { $nin: matchIdsWithResult2 };
-    }
-    const hasActive = await LudoMatch.findOne(activeQuery2);
-    if (hasActive) {
-      return res.status(400).json({ message: 'You already have an active match. Finish it before joining a new one.' });
     }
 
     const user = await User.findById(req.user._id);
@@ -360,10 +346,13 @@ const checkMatchWaiting = async (req, res) => {
 };
 
 // @desc    Get my matches (waiting / live / history)
-// @route   GET /api/ludo/my-matches?status=waiting|live|history
+// @route   GET /api/ludo/my-matches?status=waiting|live|history&page=1&limit=25
 const getMyMatches = async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, page = 1, limit = 25 } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
     const userId = req.user._id;
 
     const query = {
@@ -387,18 +376,27 @@ const getMyMatches = async (req, res) => {
         query._id = { $in: matchIdsWithResult };
       } else {
         // No result requests exist, return empty
-        return res.json([]);
+        return res.json({ records: [], totalCount: 0, page: 1, totalPages: 0 });
       }
     } else if (status === 'history') {
       query.status = { $in: ['completed', 'cancelled'] };
     }
 
-    const matches = await LudoMatch.find(query)
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
+    const [matches, totalCount] = await Promise.all([
+      LudoMatch.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      LudoMatch.countDocuments(query),
+    ]);
 
-    res.json(matches);
+    res.json({
+      records: matches,
+      totalCount,
+      page: pageNum,
+      totalPages: Math.ceil(totalCount / limitNum),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -656,7 +654,7 @@ const cancelAsLoss = async (req, res) => {
 // @route   GET /api/ludo/settings
 const getLudoSettings = async (req, res) => {
   try {
-    const settings = await AdminSettings.findOne({ key: 'main' }).select('ludoGameDurationMinutes ludoDummyRunningBattles ludoCommTier1Max ludoCommTier1Pct ludoCommTier2Max ludoCommTier2Pct ludoCommTier3Pct').lean();
+    const settings = await AdminSettings.findOne({ key: 'main' }).select('ludoGameDurationMinutes ludoDummyRunningBattles ludoCommTier1Max ludoCommTier1Pct ludoCommTier2Max ludoCommTier2Pct ludoCommTier3Pct ludoEnabled ludoDisableReason ludoWarning').lean();
     res.json({
       ludoGameDurationMinutes: settings?.ludoGameDurationMinutes ?? GAME_DURATION_DEFAULT_MINUTES,
       ludoDummyRunningBattles: settings?.ludoDummyRunningBattles ?? 15,
@@ -665,6 +663,9 @@ const getLudoSettings = async (req, res) => {
       ludoCommTier2Max: settings?.ludoCommTier2Max ?? 600,
       ludoCommTier2Pct: settings?.ludoCommTier2Pct ?? 8,
       ludoCommTier3Pct: settings?.ludoCommTier3Pct ?? 5,
+      ludoEnabled: settings?.ludoEnabled ?? true,
+      ludoDisableReason: settings?.ludoDisableReason || '',
+      ludoWarning: settings?.ludoWarning || '',
     });
   } catch (error) {
     console.error(error);
@@ -733,12 +734,72 @@ const getRunningBattles = async (req, res) => {
   }
 };
 
+// @desc    Check & expire match if room code timer is up (called by frontend when countdown hits 0)
+// @route   POST /api/ludo/check-expiry
+const checkExpiry = async (req, res) => {
+  try {
+    const { matchId } = req.body;
+    const match = await LudoMatch.findById(matchId);
+    if (!match) return res.status(404).json({ message: 'Match not found' });
+
+    // Only act on live matches with no room code and expired timer
+    if (match.status !== 'live') return res.json({ expired: false, status: match.status });
+    if (match.roomCode && match.roomCode.trim() !== '') return res.json({ expired: false, status: 'live' });
+    if (!match.roomCodeExpiryAt || new Date() < new Date(match.roomCodeExpiryAt)) {
+      return res.json({ expired: false, status: 'live' });
+    }
+
+    // Timer is up — expire and refund both players
+    const io = req.app.get('io');
+    for (const player of match.players) {
+      const u = await User.findById(player.userId);
+      if (u) {
+        const balBef = u.walletBalance;
+        u.walletBalance += player.amountPaid;
+        await u.save();
+        await recordWalletTx(
+          u._id, 'credit', 'ludo_refund', player.amountPaid,
+          `Room code not shared in time — ₹${player.amountPaid} refunded`,
+          balBef, u.walletBalance, match._id
+        );
+      }
+
+      await Notification.create({
+        userId: player.userId,
+        type: 'game',
+        title: 'Ludo Match Expired',
+        message: `Room code नहीं डाला गया। ₹${player.amountPaid} आपके wallet में वापस कर दिया गया।`,
+      });
+
+      if (io) {
+        io.to(`user_${player.userId}`).emit('ludo:match-cancelled', { matchId: match._id.toString() });
+        io.to(`user_${player.userId}`).emit('wallet:balance-updated');
+      }
+    }
+
+    match.status = 'cancelled';
+    match.cancelledAt = new Date();
+    match.cancelReason = 'Room code not shared in time';
+    await match.save();
+
+    console.log(`[Ludo] Room code expired for match ${match._id} (triggered by client), refunded both`);
+
+    if (io) io.emit('ludo:waiting-updated');
+
+    res.json({ expired: true, status: 'cancelled' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   createMatch,
   submitRoomCode,
   joinMatch,
   cancelMatch,
   checkMatchWaiting,
+  checkExpiry,
   getMyMatches,
   getMatchDetail,
   submitResult,

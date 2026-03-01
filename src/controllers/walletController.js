@@ -126,6 +126,14 @@ const createDepositRequest = async (req, res) => {
 // @route   POST /api/wallet/withdraw
 const createWithdrawalRequest = async (req, res) => {
   try {
+    // Check if withdrawals are enabled
+    const AdminSettings = require('../models/AdminSettings');
+    const adminSettings = await AdminSettings.findOne({ key: 'main' });
+    if (adminSettings && adminSettings.withdrawalsEnabled === false) {
+      const reason = adminSettings.withdrawalDisableReason || 'Withdrawals are currently disabled.';
+      return res.status(403).json({ message: reason });
+    }
+
     const { amount } = req.body;
 
     if (!amount || amount < 100) {
@@ -209,7 +217,14 @@ const getWithdrawalInfo = async (req, res) => {
     const user = await User.findById(req.user._id).select('walletBalance totalDeposited');
     const totalDeposited = user.totalDeposited || 0;
     const earnings = Math.max(0, user.walletBalance - totalDeposited);
-    res.json({ walletBalance: user.walletBalance, totalDeposited, earnings });
+
+    // Check if withdrawals are enabled
+    const AdminSettings = require('../models/AdminSettings');
+    const adminSettings = await AdminSettings.findOne({ key: 'main' });
+    const withdrawalsEnabled = adminSettings?.withdrawalsEnabled ?? true;
+    const withdrawalDisableReason = adminSettings?.withdrawalDisableReason || '';
+
+    res.json({ walletBalance: user.walletBalance, totalDeposited, earnings, withdrawalsEnabled, withdrawalDisableReason });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

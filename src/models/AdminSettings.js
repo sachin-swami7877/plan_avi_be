@@ -31,6 +31,15 @@ const adminSettingsSchema = new mongoose.Schema({
   ludoGameDurationMinutes: { type: Number, default: 30, min: 5, max: 120 },
   // Ludo: number of dummy running battles to show on user app (frontend generates them)
   ludoDummyRunningBattles: { type: Number, default: 15, min: 0, max: 50 },
+  // Bets toggle (persisted so it survives server restarts)
+  betsEnabled: { type: Boolean, default: true },
+  // Withdrawal toggle
+  withdrawalsEnabled: { type: Boolean, default: true },
+  withdrawalDisableReason: { type: String, default: '' },
+  // Ludo: enable/disable new matches
+  ludoEnabled: { type: Boolean, default: true },
+  ludoDisableReason: { type: String, default: '' },
+  ludoWarning: { type: String, default: '' },
   // Ludo: tiered commission structure
   // Tier 1: entry <= ludoCommTier1Max => ludoCommTier1Pct % commission
   ludoCommTier1Max: { type: Number, default: 250 },

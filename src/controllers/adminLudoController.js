@@ -310,6 +310,25 @@ const updateLudoMatchStatus = async (req, res) => {
   }
 };
 
+// @desc    Bulk delete cancelled/expired ludo matches
+// @route   POST /api/admin/ludo/matches/bulk-delete
+const bulkDeleteLudoMatches = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'No match IDs provided' });
+    }
+    // Only allow deleting cancelled matches
+    const result = await LudoMatch.deleteMany({ _id: { $in: ids }, status: 'cancelled' });
+    // Also clean up any result requests for these matches
+    await LudoResultRequest.deleteMany({ matchId: { $in: ids } });
+    res.json({ message: `${result.deletedCount} matches deleted` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getAllLudoMatches,
   getLudoMatchDetail,
@@ -317,4 +336,5 @@ module.exports = {
   approveLudoResultRequest,
   rejectLudoResultRequest,
   updateLudoMatchStatus,
+  bulkDeleteLudoMatches,
 };

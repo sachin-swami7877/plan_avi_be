@@ -3,7 +3,7 @@ const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 
-const RUN_INTERVAL_MS = 60 * 1000; // every 1 minute
+const RUN_INTERVAL_MS = 15 * 1000; // every 15 seconds — fast expiry detection
 
 async function expireWaitingMatches(io) {
   const now = new Date();
@@ -112,7 +112,7 @@ function startLudoCron(io) {
 
   setInterval(runAll, RUN_INTERVAL_MS);
   runAll();
-  console.log('[Ludo Cron] Started (expire waiting + room code matches every 1 min)');
+  console.log('[Ludo Cron] Started (expire waiting + room code matches every 15s)');
 }
 
 module.exports = { startLudoCron, expireWaitingMatches };

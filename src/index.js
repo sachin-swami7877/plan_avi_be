@@ -20,6 +20,7 @@ const { GameEngine } = require('./services/gameEngine');
 const { startCleanupCron } = require('./services/cleanupEmptyRounds');
 const { startLudoCron } = require('./services/ludoCron');
 const { startNotificationCron } = require('./services/notificationCron');
+const { startOldBetsCron } = require('./services/cleanupOldBets');
 
 const app = express();
 const server = http.createServer(app);
@@ -84,6 +85,8 @@ startCleanupCron();
 startLudoCron(io);
 // Cron: every 6 hours, delete read notifications older than 10 days
 startNotificationCron();
+// Cron: every 24 hours, delete bets older than 31 days
+startOldBetsCron();
 
 const PORT = process.env.PORT || 5050;
 

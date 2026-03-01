@@ -71,15 +71,30 @@ const cashOut = async (req, res) => {
 };
 
 // @desc    Get user's bet history
-// @route   GET /api/game/history
+// @route   GET /api/game/history?page=1&limit=25
 const getBetHistory = async (req, res) => {
   try {
-    const bets = await Bet.find({ userId: req.user._id })
-      .populate('gameRoundId', 'roundId crashMultiplier')
-      .sort({ createdAt: -1 })
-      .limit(50);
-    
-    res.json(bets);
+    const { page = 1, limit = 25 } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = { userId: req.user._id };
+    const [bets, totalCount] = await Promise.all([
+      Bet.find(filter)
+        .populate('gameRoundId', 'roundId crashMultiplier')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Bet.countDocuments(filter),
+    ]);
+
+    res.json({
+      records: bets,
+      totalCount,
+      page: pageNum,
+      totalPages: Math.ceil(totalCount / limitNum),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

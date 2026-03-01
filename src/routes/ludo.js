@@ -6,6 +6,7 @@ const {
   joinMatch,
   cancelMatch,
   checkMatchWaiting,
+  checkExpiry,
   getMyMatches,
   getMatchDetail,
   submitResult,
@@ -24,6 +25,7 @@ router.post('/create', createMatch);
 router.post('/submit-room-code', submitRoomCode);
 router.post('/join', joinMatch);
 router.post('/cancel', cancelMatch);
+router.post('/check-expiry', checkExpiry);
 router.get('/match/:id/check', checkMatchWaiting);
 router.get('/settings', getLudoSettings);
 router.get('/my-matches', getMyMatches);

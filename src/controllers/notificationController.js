@@ -1,18 +1,34 @@
 const Notification = require('../models/Notification');
 
 // @desc    Get user notifications (last 7 days only)
-// @route   GET /api/notifications
+// @route   GET /api/notifications?page=1&limit=25
 const getNotifications = async (req, res) => {
   try {
+    const { page = 1, limit = 25 } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const notifications = await Notification.find({
+    const filter = {
       userId: req.user._id,
       createdAt: { $gte: sevenDaysAgo },
-    })
-      .sort({ createdAt: -1 })
-      .limit(50);
+    };
 
-    res.json(notifications);
+    const [notifications, totalCount] = await Promise.all([
+      Notification.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Notification.countDocuments(filter),
+    ]);
+
+    res.json({
+      records: notifications,
+      totalCount,
+      page: pageNum,
+      totalPages: Math.ceil(totalCount / limitNum),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

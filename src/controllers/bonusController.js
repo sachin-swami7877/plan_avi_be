@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const AdminSettings = require('../models/AdminSettings');
 const BonusRecord = require('../models/BonusRecord');
+const WalletTransaction = require('../models/WalletTransaction');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 
 // @desc    Get bonus status for current user
@@ -16,27 +17,57 @@ const getBonusStatus = async (req, res) => {
     const threshold = settings.bonusMinBet;     // e.g. 1000
     const cashback = settings.bonusCashback;     // e.g. 100
 
-    // How many times has the user crossed the threshold?
-    const totalBets = user.totalBetAmount;
-    const claimed = user.bonusClaimed;           // total bonus already credited
+    // Calculate today's deposit total from wallet transactions
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
 
-    // Next milestone: which multiple of threshold are we targeting?
-    const milestonesCrossed = Math.floor(totalBets / threshold);
+    const todayDepositAgg = await WalletTransaction.aggregate([
+      {
+        $match: {
+          userId: user._id,
+          category: { $in: ['deposit', 'admin_credit'] },
+          createdAt: { $gte: todayStart, $lte: todayEnd },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const todayDeposit = todayDepositAgg[0]?.total || 0;
+
+    const claimed = user.bonusClaimed;
+
+    // Milestones based on today's deposits
+    const milestonesCrossed = Math.floor(todayDeposit / threshold);
     const bonusEarned = milestonesCrossed * cashback;
-    const canClaim = bonusEarned > claimed;
-    const claimableAmount = bonusEarned - claimed;
-    const progressToNext = totalBets % threshold;
+
+    // Check how much bonus was already claimed today
+    const todayClaimAgg = await BonusRecord.aggregate([
+      {
+        $match: {
+          userId: user._id,
+          createdAt: { $gte: todayStart, $lte: todayEnd },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$bonusAmount' } } },
+    ]);
+    const todayClaimed = todayClaimAgg[0]?.total || 0;
+
+    const canClaim = bonusEarned > todayClaimed;
+    const claimableAmount = Math.max(0, bonusEarned - todayClaimed);
+    const progressToNext = todayDeposit % threshold;
 
     // Past records
     const history = await BonusRecord.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(50);
 
     res.json({
-      totalBets,
+      todayDeposit,
+      totalBets: todayDeposit,
       threshold,
       cashback,
       milestonesCrossed,
       bonusEarned,
-      claimed,
+      claimed: todayClaimed,
       canClaim,
       claimableAmount,
       progressToNext,
@@ -61,9 +92,40 @@ const claimBonus = async (req, res) => {
     const threshold = settings.bonusMinBet;
     const cashback = settings.bonusCashback;
 
-    const milestonesCrossed = Math.floor(user.totalBetAmount / threshold);
+    // Calculate today's deposit total
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const todayDepositAgg = await WalletTransaction.aggregate([
+      {
+        $match: {
+          userId: user._id,
+          category: { $in: ['deposit', 'admin_credit'] },
+          createdAt: { $gte: todayStart, $lte: todayEnd },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const todayDeposit = todayDepositAgg[0]?.total || 0;
+
+    const milestonesCrossed = Math.floor(todayDeposit / threshold);
     const bonusEarned = milestonesCrossed * cashback;
-    const claimableAmount = bonusEarned - user.bonusClaimed;
+
+    // How much was already claimed today
+    const todayClaimAgg = await BonusRecord.aggregate([
+      {
+        $match: {
+          userId: user._id,
+          createdAt: { $gte: todayStart, $lte: todayEnd },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$bonusAmount' } } },
+    ]);
+    const todayClaimed = todayClaimAgg[0]?.total || 0;
+
+    const claimableAmount = Math.max(0, bonusEarned - todayClaimed);
 
     if (claimableAmount <= 0) {
       return res.status(400).json({ message: 'No bonus available to claim.' });
@@ -72,13 +134,13 @@ const claimBonus = async (req, res) => {
     // Credit to wallet
     const balBefore = user.walletBalance;
     user.walletBalance += claimableAmount;
-    user.bonusClaimed = bonusEarned;
+    user.bonusClaimed = (user.bonusClaimed || 0) + claimableAmount;
     user.lastBonusClaimedAt = new Date();
     await user.save();
 
     await recordWalletTx(
       user._id, 'credit', 'bonus', claimableAmount,
-      `Bonus claimed — ₹${claimableAmount} credited`,
+      `Bonus claimed — ₹${claimableAmount} credited (today's deposit: ₹${todayDeposit})`,
       balBefore, user.walletBalance
     );
 
@@ -87,7 +149,7 @@ const claimBonus = async (req, res) => {
       userId: user._id,
       bonusAmount: claimableAmount,
       thresholdAmount: threshold,
-      totalBetsAtClaim: user.totalBetAmount,
+      totalBetsAtClaim: todayDeposit,
     });
 
     res.json({

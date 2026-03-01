@@ -30,6 +30,10 @@ class GameEngine {
     this.roundBets = [];
     this.betsEnabled = true;
     this.adminNextCrash = null; // Admin-set crash point for the NEXT round
+    // Bulk crash: next N user-bet rounds crash at same value
+    this.adminBulkCrash = null; // { crashAt: Number, total: Number, remaining: Number }
+    // Sequential crash: array of crash values consumed one per user-bet round
+    this.adminSequentialCrashes = []; // [1.0, 1.3, 1.6, 5.0, ...]
 
     // ── Timing ──
     this.WAITING_TIME = 5000;         // 5s betting window
@@ -47,8 +51,84 @@ class GameEngine {
   /* ═══════════════════════ LIFECYCLE ═══════════════════════ */
 
   async start() {
+    // Load persisted betsEnabled from database
+    try {
+      const AdminSettings = require('../models/AdminSettings');
+      const settings = await AdminSettings.findOne({ key: 'main' });
+      if (settings && typeof settings.betsEnabled === 'boolean') {
+        this.betsEnabled = settings.betsEnabled;
+        console.log(`🎮 Loaded betsEnabled from DB: ${this.betsEnabled}`);
+      }
+    } catch (err) {
+      console.error('Failed to load betsEnabled from DB, defaulting to true:', err.message);
+    }
     console.log('🎮 Game Engine Started (Admin-Optimized)');
+
+    // Clean up orphaned "active" bets from previous server runs
+    await this.cleanupOrphanedBets();
+
     this.runGameLoop();
+  }
+
+  /**
+   * On server startup, find any bets still marked "active" that belong to
+   * rounds that already crashed. These are orphans from a server restart
+   * that happened mid-round. Mark them as "lost".
+   */
+  async cleanupOrphanedBets() {
+    try {
+      // Find all crashed rounds
+      const crashedRounds = await GameRound.find({ status: 'crashed' }).select('_id');
+      const crashedIds = crashedRounds.map((r) => r._id);
+
+      if (crashedIds.length === 0) return;
+
+      // Bulk-update any "active" bets in those rounds → "lost"
+      const result = await Bet.updateMany(
+        { gameRoundId: { $in: crashedIds }, status: 'active' },
+        { $set: { status: 'lost', profit: 0 } }
+      );
+
+      if (result.modifiedCount > 0) {
+        console.log(`🧹 Cleaned up ${result.modifiedCount} orphaned active bets from crashed rounds`);
+      }
+
+      // Also handle "running" or "waiting" rounds that were never completed (server crash)
+      const staleRounds = await GameRound.find({ status: { $in: ['waiting', 'running'] } }).select('_id');
+      if (staleRounds.length > 0) {
+        const staleIds = staleRounds.map((r) => r._id);
+
+        // Refund bets from stale waiting/running rounds
+        const staleBets = await Bet.find({ gameRoundId: { $in: staleIds }, status: 'active' });
+        for (const bet of staleBets) {
+          try {
+            const user = await User.findById(bet.userId);
+            if (user) {
+              user.walletBalance += bet.amount;
+              await user.save();
+              await recordWalletTx(user._id, bet.amount, 'credit', 'bet_refund', `Refund for orphaned bet (server restart)`);
+            }
+            bet.status = 'lost';
+            bet.profit = 0;
+            await bet.save();
+          } catch (refundErr) {
+            console.error(`Failed to refund orphaned bet ${bet._id}:`, refundErr.message);
+          }
+        }
+
+        // Mark stale rounds as crashed
+        await GameRound.updateMany(
+          { _id: { $in: staleIds } },
+          { $set: { status: 'crashed', crashedAt: new Date() } }
+        );
+
+        if (staleBets.length > 0) {
+          console.log(`🧹 Refunded ${staleBets.length} bets from ${staleRounds.length} stale rounds`);
+        }
+      }
+    } catch (err) {
+      console.error('Cleanup orphaned bets error:', err.message);
+    }
   }
 
   async runGameLoop() {
@@ -145,22 +225,50 @@ class GameEngine {
   /* ═════════════════ SMART CRASH CALCULATION ═════════════════ */
 
   async smartRecalculateCrash() {
-    // ── ADMIN OVERRIDE: If admin set a specific crash point, use it ──
+    // ── PRIORITY 1: ADMIN SINGLE OVERRIDE (highest priority) ──
     if (this.adminNextCrash !== null) {
       const adminCrash = this.adminNextCrash;
       this.adminNextCrash = null; // consume it (one-time use)
       this.currentRound.crashMultiplier = Number(adminCrash.toFixed(2));
       await this.currentRound.save();
-      console.log(`👑 ADMIN OVERRIDE → crash at ${adminCrash.toFixed(2)}x`);
+      console.log(`👑 ADMIN SINGLE OVERRIDE → crash at ${adminCrash.toFixed(2)}x`);
       return;
     }
 
     const bets = await Bet.find({ gameRoundId: this.currentRound._id });
+    const hasRealBets = bets.length > 0;
+
+    // ── PRIORITY 2: ADMIN SEQUENTIAL CRASHES (per-round values, only for user-bet rounds) ──
+    if (this.adminSequentialCrashes.length > 0 && hasRealBets) {
+      const crashVal = this.adminSequentialCrashes.shift(); // consume first value
+      this.currentRound.crashMultiplier = Number(Number(crashVal).toFixed(2));
+      await this.currentRound.save();
+      console.log(`👑 ADMIN SEQUENTIAL [${this.adminSequentialCrashes.length} left] → crash at ${crashVal}x`);
+      // Emit update to admin so UI stays in sync
+      this.io.to('admins').emit('admin:crash-queue-update', this.getCrashQueueState());
+      return;
+    }
+
+    // ── PRIORITY 3: ADMIN BULK CRASH (same value for N user-bet rounds) ──
+    if (this.adminBulkCrash && this.adminBulkCrash.remaining > 0 && hasRealBets) {
+      const { crashAt, remaining, total } = this.adminBulkCrash;
+      this.adminBulkCrash.remaining = remaining - 1;
+      this.currentRound.crashMultiplier = Number(Number(crashAt).toFixed(2));
+      await this.currentRound.save();
+      console.log(`👑 ADMIN BULK [${this.adminBulkCrash.remaining}/${total} left] → crash at ${crashAt}x`);
+      if (this.adminBulkCrash.remaining <= 0) {
+        this.adminBulkCrash = null;
+        console.log('👑 ADMIN BULK CRASH completed — cleared');
+      }
+      // Emit update to admin
+      this.io.to('admins').emit('admin:crash-queue-update', this.getCrashQueueState());
+      return;
+    }
 
     let crashPoint;
 
     // ── RULE 0: No real bets → cosmetic round (1x – 20x) ──
-    if (bets.length === 0) {
+    if (!hasRealBets) {
       crashPoint = Number((1 + Math.random() * 19).toFixed(2));
       console.log(`📈 No bets — cosmetic crash at ${crashPoint}x`);
       this.currentRound.crashMultiplier = crashPoint;
@@ -396,15 +504,23 @@ class GameEngine {
       status: 'active',
     });
 
-    for (const bet of activeBets) {
-      bet.status = 'lost';
-      bet.profit = -bet.amount;
-      await bet.save();
+    if (activeBets.length > 0) {
+      console.log(`💰 Settling ${activeBets.length} active bets as lost...`);
+    }
 
-      this.io.to(`user_${bet.userId}`).emit('bet:lost', {
-        amount: bet.amount,
-        crashMultiplier,
-      });
+    for (const bet of activeBets) {
+      try {
+        bet.status = 'lost';
+        bet.profit = -bet.amount;
+        await bet.save();
+
+        this.io.to(`user_${bet.userId}`).emit('bet:lost', {
+          amount: bet.amount,
+          crashMultiplier,
+        });
+      } catch (settleErr) {
+        console.error(`❌ Failed to settle bet ${bet._id}:`, settleErr.message);
+      }
     }
 
     // Update round totals
@@ -595,6 +711,43 @@ class GameEngine {
     return this.adminNextCrash;
   }
 
+  // ── Bulk crash: next N user-bet rounds at same multiplier ──
+  setBulkCrash(count, crashAt) {
+    if (crashAt < 1) throw new Error('Crash multiplier must be at least 1.00');
+    if (count < 1 || count > 100) throw new Error('Count must be between 1 and 100');
+    this.adminBulkCrash = { crashAt: Number(crashAt), total: Number(count), remaining: Number(count) };
+    console.log(`👑 Admin set BULK crash: next ${count} user-bet rounds at ${crashAt}x`);
+  }
+
+  clearBulkCrash() {
+    this.adminBulkCrash = null;
+    console.log('👑 Admin cleared bulk crash');
+  }
+
+  // ── Sequential crashes: specific values for each round ──
+  setSequentialCrashes(values) {
+    if (!Array.isArray(values) || values.length === 0) throw new Error('Provide an array of crash values');
+    if (values.length > 100) throw new Error('Max 100 sequential values');
+    for (const v of values) {
+      if (Number(v) < 1) throw new Error('All crash values must be at least 1.00');
+    }
+    this.adminSequentialCrashes = values.map(v => Number(v));
+    console.log(`👑 Admin set SEQUENTIAL crashes: [${values.join(', ')}]`);
+  }
+
+  clearSequentialCrashes() {
+    this.adminSequentialCrashes = [];
+    console.log('👑 Admin cleared sequential crashes');
+  }
+
+  getCrashQueueState() {
+    return {
+      adminNextCrash: this.adminNextCrash,
+      bulkCrash: this.adminBulkCrash,
+      sequentialCrashes: this.adminSequentialCrashes,
+    };
+  }
+
   getCurrentState() {
     return {
       round: this.currentRound,
@@ -603,6 +756,8 @@ class GameEngine {
       status: this.currentRound?.status || 'idle',
       betsEnabled: this.betsEnabled,
       adminNextCrash: this.adminNextCrash,
+      bulkCrash: this.adminBulkCrash,
+      sequentialCrashes: this.adminSequentialCrashes,
     };
   }
 

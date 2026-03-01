@@ -24,11 +24,17 @@ async function getOrCreateSettings() {
 
 const getDashboardStats = async (req, res) => {
   try {
-    const { period } = req.query;
+    const { period, from: fromStr, to: toStr } = req.query;
 
     // Build date filter for period-based stats
     let dateFilter = {};
-    if (period && period !== 'all') {
+    if (fromStr && toStr) {
+      // Custom date range
+      const fromDate = new Date(fromStr);
+      const toDate = new Date(toStr);
+      toDate.setHours(23, 59, 59, 999);
+      dateFilter = { createdAt: { $gte: fromDate, $lte: toDate } };
+    } else if (period && period !== 'all') {
       const now = new Date();
       let from;
       if (period === 'today') {
@@ -41,34 +47,71 @@ const getDashboardStats = async (req, res) => {
       if (from) dateFilter = { createdAt: { $gte: from } };
     }
 
+    const hasPeriodFilter = !!dateFilter.createdAt;
+
     // These always show current counts (no date filter for pending)
     const [totalUsers, pendingDeposits, pendingWithdrawals] = await Promise.all([
-      User.countDocuments(dateFilter.createdAt ? dateFilter : {}),
+      User.countDocuments(hasPeriodFilter ? dateFilter : {}),
       WalletRequest.countDocuments({ type: 'deposit', status: 'pending' }),
       WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending' }),
     ]);
 
     // Bet stats use date filter
-    const betFilter = dateFilter.createdAt ? dateFilter : {};
+    const betFilter = hasPeriodFilter ? dateFilter : {};
+
+    // Aviator bets: field is 'amount' (bet) and 'profit' (net win for won bets)
     const [totalBets, totalWins, betAgg] = await Promise.all([
       Bet.countDocuments(betFilter),
       Bet.countDocuments({ status: 'won', ...betFilter }),
       Bet.aggregate([
         { $match: betFilter },
-        { $group: { _id: null, totalBetAmount: { $sum: '$betAmount' }, totalWinAmount: { $sum: '$winAmount' } } },
+        { $group: { _id: null, totalBetAmount: { $sum: '$amount' }, totalWinAmount: { $sum: '$profit' } } },
       ]),
     ]);
 
-    const aggResult = betAgg[0] || { totalBetAmount: 0, totalWinAmount: 0 };
+    // Spinner: spinCost = bet, winAmount = win
+    const spinnerAgg = await SpinnerRecord.aggregate([
+      { $match: betFilter },
+      { $group: { _id: null, totalSpinCost: { $sum: '$spinCost' }, totalSpinWin: { $sum: '$winAmount' } } },
+    ]);
 
-    // If no period filter, also include global stats as fallback
-    let totalBetAmount = aggResult.totalBetAmount;
-    let totalWinAmount = aggResult.totalWinAmount;
-    if (!period || period === 'all') {
+    // Ludo: completed matches — pool = sum of players' amountPaid (bet), winnerAmount = pool - commission (calculated on-the-fly)
+    const ludoAgg = await LudoMatch.aggregate([
+      { $match: { status: 'completed', ...betFilter } },
+      { $unwind: '$players' },
+      { $group: { _id: null, totalLudoBet: { $sum: '$players.amountPaid' } } },
+    ]);
+
+    // Ludo win = total amount credited to winners (we track via WalletTransaction for accuracy)
+    const ludoWinAgg = await WalletTransaction.aggregate([
+      { $match: { category: 'ludo_win', ...betFilter } },
+      { $group: { _id: null, totalLudoWin: { $sum: '$amount' } } },
+    ]);
+
+    const aviatorBet = betAgg[0]?.totalBetAmount || 0;
+    const aviatorWin = betAgg[0]?.totalWinAmount || 0;
+    const spinBet = spinnerAgg[0]?.totalSpinCost || 0;
+    const spinWin = spinnerAgg[0]?.totalSpinWin || 0;
+    const ludoBet = ludoAgg[0]?.totalLudoBet || 0;
+    const ludoWin = ludoWinAgg[0]?.totalLudoWin || 0;
+
+    // Combined totals across all game types
+    let totalBetAmount = aviatorBet + spinBet + ludoBet;
+    let totalWinAmount = aviatorWin + spinWin + ludoWin;
+
+    // If no period filter, also include global stats as fallback for aviator
+    if (!hasPeriodFilter) {
       const globalStats = await GlobalStats.findOne({ key: 'main' });
       if (globalStats) {
-        totalBetAmount = globalStats.totalBetAmount || totalBetAmount;
-        totalWinAmount = globalStats.totalWinAmount || totalWinAmount;
+        // GlobalStats tracks aviator only — replace aviator portion if global is larger
+        const globalBet = globalStats.totalBetAmount || 0;
+        const globalWin = globalStats.totalWinAmount || 0;
+        if (globalBet > aviatorBet) {
+          totalBetAmount = globalBet + spinBet + ludoBet;
+        }
+        if (globalWin > aviatorWin) {
+          totalWinAmount = globalWin + spinWin + ludoWin;
+        }
       }
     }
 
@@ -91,9 +134,14 @@ const getDashboardStats = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { period, search } = req.query;
+    const { period, search, from: fromStr, to: toStr } = req.query;
     let filter = {};
-    if (period && period !== 'all') {
+    if (fromStr && toStr) {
+      const fromDate = new Date(fromStr);
+      const toDate = new Date(toStr);
+      toDate.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: fromDate, $lte: toDate };
+    } else if (period && period !== 'all') {
       const now = new Date();
       let from;
       if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -355,11 +403,18 @@ const getWalletRequests = async (req, res) => {
 const processWalletRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { action } = req.body;
+    const { action, editedAmount } = req.body;
 
     const walletRequest = await WalletRequest.findById(id);
     if (!walletRequest) return res.status(404).json({ message: 'Request not found' });
     if (walletRequest.status !== 'pending') return res.status(400).json({ message: 'Request already processed' });
+
+    // Allow admin to edit the deposit amount before processing
+    if (editedAmount !== undefined && editedAmount !== null && walletRequest.type === 'deposit') {
+      const newAmt = Number(editedAmount);
+      if (isNaN(newAmt) || newAmt < 1) return res.status(400).json({ message: 'Edited amount must be at least ₹1' });
+      walletRequest.amount = newAmt;
+    }
 
     const user = await User.findById(walletRequest.userId);
 
@@ -436,9 +491,37 @@ const processWalletRequest = async (req, res) => {
 
 const getAllBets = async (req, res) => {
   try {
-    const { status, page = 1, limit = 25 } = req.query;
+    const { status, page = 1, limit = 25, period, from: fromStr, to: toStr, search } = req.query;
     const filter = {};
-    if (status) filter.status = status;
+    if (status) {
+      filter.status = status;
+    } else {
+      // Default: only show settled bets (won/lost) in history, not active ones
+      filter.status = { $in: ['won', 'lost'] };
+    }
+
+    // Search by user name or phone
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), 'i');
+      const matchingUsers = await User.find({
+        $or: [{ name: regex }, { phone: regex }],
+      }).select('_id');
+      filter.userId = { $in: matchingUsers.map((u) => u._id) };
+    }
+
+    // Date filtering
+    if (fromStr && toStr) {
+      const fromDate = new Date(fromStr);
+      const toDate = new Date(toStr);
+      toDate.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: fromDate, $lte: toDate };
+    } else if (period && period !== 'all') {
+      const now = new Date();
+      let from;
+      if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      else if (period === '7days') from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      if (from) filter.createdAt = { $gte: from };
+    }
 
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
@@ -455,6 +538,20 @@ const getAllBets = async (req, res) => {
     ]);
 
     res.json({ data: bets, totalCount, page: pageNum, totalPages: Math.ceil(totalCount / limitNum) });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const deleteBets = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'Provide an array of bet IDs' });
+    }
+    const result = await Bet.deleteMany({ _id: { $in: ids } });
+    res.json({ message: `Deleted ${result.deletedCount} bets`, deletedCount: result.deletedCount });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -584,7 +681,7 @@ const getCurrentRoundWithBets = async (req, res) => {
 
     res.json({
       round: state.round,
-      state: { status: state.status, multiplier: state.multiplier, isRunning: state.isRunning, adminNextCrash: state.adminNextCrash },
+      state: { status: state.status, multiplier: state.multiplier, isRunning: state.isRunning, adminNextCrash: state.adminNextCrash, bulkCrash: state.bulkCrash, sequentialCrashes: state.sequentialCrashes },
       bets,
     });
   } catch (error) {
@@ -643,6 +740,86 @@ const clearNextCrash = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(400).json({ message: error.message });
+  }
+};
+
+// @desc    Set bulk crash: next N user-bet rounds at same multiplier
+// @route   POST /api/admin/game/set-bulk-crash
+const setBulkCrash = async (req, res) => {
+  try {
+    const { count, crashAt } = req.body;
+    if (typeof crashAt !== 'number' || crashAt < 1) {
+      return res.status(400).json({ message: 'crashAt must be a number >= 1' });
+    }
+    if (typeof count !== 'number' || count < 1 || count > 100) {
+      return res.status(400).json({ message: 'count must be between 1 and 100' });
+    }
+    const gameEngine = req.app.get('gameEngine');
+    gameEngine.setBulkCrash(count, crashAt);
+    res.json({ message: `Next ${count} user-bet rounds will crash at ${crashAt}x`, bulkCrash: gameEngine.adminBulkCrash });
+  } catch (error) {
+    console.error(error);
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// @desc    Clear bulk crash
+// @route   POST /api/admin/game/clear-bulk-crash
+const clearBulkCrash = async (req, res) => {
+  try {
+    const gameEngine = req.app.get('gameEngine');
+    gameEngine.clearBulkCrash();
+    res.json({ message: 'Bulk crash cleared' });
+  } catch (error) {
+    console.error(error);
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// @desc    Set sequential crashes: specific values for each round
+// @route   POST /api/admin/game/set-sequential-crashes
+const setSequentialCrashes = async (req, res) => {
+  try {
+    const { values } = req.body;
+    if (!Array.isArray(values) || values.length === 0) {
+      return res.status(400).json({ message: 'Provide an array of crash values' });
+    }
+    for (const v of values) {
+      if (typeof v !== 'number' || v < 1) {
+        return res.status(400).json({ message: 'All values must be numbers >= 1' });
+      }
+    }
+    const gameEngine = req.app.get('gameEngine');
+    gameEngine.setSequentialCrashes(values);
+    res.json({ message: `Set ${values.length} sequential crash values`, sequentialCrashes: values });
+  } catch (error) {
+    console.error(error);
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// @desc    Clear sequential crashes
+// @route   POST /api/admin/game/clear-sequential-crashes
+const clearSequentialCrashes = async (req, res) => {
+  try {
+    const gameEngine = req.app.get('gameEngine');
+    gameEngine.clearSequentialCrashes();
+    res.json({ message: 'Sequential crashes cleared' });
+  } catch (error) {
+    console.error(error);
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// @desc    Get current crash queue state
+// @route   GET /api/admin/game/crash-queue
+const getCrashQueue = async (req, res) => {
+  try {
+    const gameEngine = req.app.get('gameEngine');
+    res.json(gameEngine.getCrashQueueState());
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
@@ -708,8 +885,16 @@ const getSettings = async (req, res) => {
   try {
     const gameEngine = req.app.get('gameEngine');
     const settings = await getOrCreateSettings();
+    // Always read betsEnabled from DB (authoritative) — not game engine memory
+    // which may be stale after a server restart before DB load completes
+    const dbBetsEnabled = settings.betsEnabled ?? true;
+    // Silently sync game engine memory if it doesn't match DB (no socket emit)
+    if (gameEngine.getBetsEnabled() !== dbBetsEnabled) {
+      gameEngine.betsEnabled = dbBetsEnabled;
+      console.log(`⚙️  Synced game engine betsEnabled to DB value: ${dbBetsEnabled}`);
+    }
     res.json({
-      betsEnabled: gameEngine.getBetsEnabled(),
+      betsEnabled: dbBetsEnabled,
       qrCodeUrl: settings.qrCodeUrl,
       upiId: settings.upiId,
       upiNumber: settings.upiNumber,
@@ -725,6 +910,16 @@ const getSettings = async (req, res) => {
       userWarning: settings.userWarning || '',
       ludoGameDurationMinutes: settings.ludoGameDurationMinutes ?? 30,
       ludoDummyRunningBattles: settings.ludoDummyRunningBattles ?? 15,
+      ludoEnabled: settings.ludoEnabled ?? true,
+      ludoDisableReason: settings.ludoDisableReason || '',
+      ludoWarning: settings.ludoWarning || '',
+      ludoCommTier1Max: settings.ludoCommTier1Max ?? 250,
+      ludoCommTier1Pct: settings.ludoCommTier1Pct ?? 10,
+      ludoCommTier2Max: settings.ludoCommTier2Max ?? 600,
+      ludoCommTier2Pct: settings.ludoCommTier2Pct ?? 8,
+      ludoCommTier3Pct: settings.ludoCommTier3Pct ?? 5,
+      withdrawalsEnabled: settings.withdrawalsEnabled ?? true,
+      withdrawalDisableReason: settings.withdrawalDisableReason || '',
     });
   } catch (error) {
     console.error(error);
@@ -748,15 +943,20 @@ const updateSettings = async (req, res) => {
       ludoCommTier1Max, ludoCommTier1Pct,
       ludoCommTier2Max, ludoCommTier2Pct,
       ludoCommTier3Pct,
+      withdrawalsEnabled,
+      withdrawalDisableReason,
+      ludoEnabled,
+      ludoDisableReason,
+      ludoWarning,
     } = req.body;
 
-    // Handle betsEnabled toggle (game engine)
+    // Handle betsEnabled toggle (game engine + persist to DB)
     if (typeof betsEnabled === 'boolean') {
       const gameEngine = req.app.get('gameEngine');
       gameEngine.setBetsEnabled(betsEnabled);
     }
 
-    // Persist all other settings to AdminSettings
+    // Persist all settings to AdminSettings
     const settings = await getOrCreateSettings();
     if (upiId !== undefined) settings.upiId = upiId;
     if (upiNumber !== undefined) settings.upiNumber = upiNumber;
@@ -783,6 +983,12 @@ const updateSettings = async (req, res) => {
     if (ludoCommTier2Max !== undefined) settings.ludoCommTier2Max = Number(ludoCommTier2Max);
     if (ludoCommTier2Pct !== undefined) settings.ludoCommTier2Pct = Number(ludoCommTier2Pct);
     if (ludoCommTier3Pct !== undefined) settings.ludoCommTier3Pct = Number(ludoCommTier3Pct);
+    if (typeof betsEnabled === 'boolean') settings.betsEnabled = betsEnabled;
+    if (typeof withdrawalsEnabled === 'boolean') settings.withdrawalsEnabled = withdrawalsEnabled;
+    if (withdrawalDisableReason !== undefined) settings.withdrawalDisableReason = withdrawalDisableReason;
+    if (typeof ludoEnabled === 'boolean') settings.ludoEnabled = ludoEnabled;
+    if (ludoDisableReason !== undefined) settings.ludoDisableReason = ludoDisableReason;
+    if (ludoWarning !== undefined) settings.ludoWarning = ludoWarning;
     await settings.save();
 
     res.json({ message: 'Settings updated', betsEnabled: typeof betsEnabled === 'boolean' ? betsEnabled : undefined });
@@ -959,6 +1165,7 @@ module.exports = {
   getWalletRequests,
   processWalletRequest,
   getAllBets,
+  deleteBets,
   getWinningBets,
   getAdminNotifications,
   forceCrashBet,
@@ -967,6 +1174,11 @@ module.exports = {
   forceCrashRound,
   setNextCrash,
   clearNextCrash,
+  setBulkCrash,
+  clearBulkCrash,
+  setSequentialCrashes,
+  clearSequentialCrashes,
+  getCrashQueue,
   getSpinnerRecords,
   getSettings,
   updateSettings,
