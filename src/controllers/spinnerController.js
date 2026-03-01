@@ -4,14 +4,14 @@ const { recordWalletTx } = require('../utils/recordWalletTx');
 
 const VALID_SPIN_COSTS = [50, 100];
 
-// ₹50 spin outcomes: thank_you 50%, ₹50 17%, ₹70 15%, ₹100 13%, ₹120 5%
-// Expected payout = 38, profit = ₹12 (24%)
+// ₹50 spin outcomes: thank_you 53%, ₹50 17%, ₹70 13%, ₹100 10%, ₹120 3%
+// Expected payout = 31.2, profit = ₹18.8 (37.6%)
 const OUTCOMES_50 = [
-  { value: 'thank_you', weight: 50 },
+  { value: 'thank_you', weight: 53 },
   { value: '50', weight: 17 },
-  { value: '70', weight: 15 },
-  { value: '100', weight: 13 },
-  { value: '120', weight: 5 },
+  { value: '70', weight: 13 },
+  { value: '100', weight: 10 },
+  { value: '120', weight: 3 },
 ];
 
 // ₹100 spin outcomes: thank_you 40%, ₹50 14%, ₹100 17%, ₹120 14%, ₹170 10%, ₹200 5%
@@ -24,6 +24,14 @@ const OUTCOMES_100 = [
   { value: '170', weight: 10 },
   { value: '200', weight: 5 },
 ];
+
+// Big win thresholds — if user wins these, force next 1-2 spins to thank_you
+const BIG_WIN_50 = ['100', '120'];       // ₹50 spin: ₹100 and ₹120 are big wins
+const BIG_WIN_100 = ['170', '200'];       // ₹100 spin: ₹170 and ₹200 are big wins
+
+// Per-user forced thank_you counter (in-memory, resets on server restart)
+// Key: `${userId}_${spinCost}`, Value: remaining forced thank_you count
+const forcedThankYou = new Map();
 
 function getWeightedOutcome(outcomes) {
   const total = outcomes.reduce((s, o) => s + o.weight, 0);
@@ -55,12 +63,31 @@ const playSpinner = async (req, res) => {
       return res.status(400).json({ message: `Minimum balance ₹${spinCost} required to spin` });
     }
 
+    const userKey = `${user._id}_${spinCost}`;
     const outcomes = spinCost === 100 ? OUTCOMES_100 : OUTCOMES_50;
-    const outcome = getWeightedOutcome(outcomes);
+    let outcome;
+
+    // Check if user has forced thank_you spins remaining
+    const remaining = forcedThankYou.get(userKey) || 0;
+    if (remaining > 0) {
+      outcome = 'thank_you';
+      forcedThankYou.set(userKey, remaining - 1);
+      if (remaining - 1 <= 0) forcedThankYou.delete(userKey);
+    } else {
+      outcome = getWeightedOutcome(outcomes);
+    }
+
     await new Promise((r) => setTimeout(r, SPIN_ROUND_DELAY_MS));
     const winAmount = outcome === 'thank_you' ? 0 : Number(outcome);
 
-    // Pehle spin cost deduct, phir win amount add (e.g. 300 - 50 + 100 = 350)
+    // If this was a big win, force next 1-2 spins to thank_you for this user+cost
+    const bigWins = spinCost === 100 ? BIG_WIN_100 : BIG_WIN_50;
+    if (bigWins.includes(outcome)) {
+      const forceCount = Math.random() < 0.5 ? 1 : 2; // random 1 or 2
+      forcedThankYou.set(userKey, forceCount);
+    }
+
+    // Pehle spin cost deduct, phir win amount add
     const balBefore = user.walletBalance;
     user.walletBalance = user.walletBalance - spinCost + winAmount;
     await user.save();
