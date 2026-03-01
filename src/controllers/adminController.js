@@ -154,6 +154,28 @@ const createUser = async (req, res) => {
   }
 };
 
+const updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, role } = req.body;
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (name !== undefined) user.name = String(name).trim() || user.name;
+    if (role !== undefined) {
+      const validRoles = ['user', 'admin', 'manager'];
+      if (!validRoles.includes(role)) return res.status(400).json({ message: 'Invalid role' });
+      user.role = role;
+    }
+
+    await user.save();
+    res.json({ _id: user._id, name: user.name, role: user.role, isAdmin: user.isAdmin });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 const updateUserBalance = async (req, res) => {
   try {
     const { id } = req.params;
@@ -168,11 +190,14 @@ const updateUserBalance = async (req, res) => {
     else newBalance = Number(amount);
 
     // Use findByIdAndUpdate to avoid full-document validation
-    const updated = await User.findByIdAndUpdate(
-      id,
-      { walletBalance: newBalance },
-      { new: true, runValidators: false }
-    );
+    // Admin credit counts as deposit (non-withdrawable) for earnings tracking
+    const updateOps = { walletBalance: newBalance };
+    if (operation === 'add') {
+      updateOps.$inc = { totalDeposited: Number(amount) };
+    }
+    const updated = updateOps.$inc
+      ? await User.findByIdAndUpdate(id, { walletBalance: newBalance, $inc: { totalDeposited: Number(amount) } }, { new: true, runValidators: false })
+      : await User.findByIdAndUpdate(id, { walletBalance: newBalance }, { new: true, runValidators: false });
 
     const txType = newBalance >= balBefore ? 'credit' : 'debit';
     const txAmt = Math.abs(newBalance - balBefore);
@@ -186,6 +211,48 @@ const updateUserBalance = async (req, res) => {
     if (io) io.to(`user_${id}`).emit('wallet:balance-updated', { walletBalance: newBalance });
 
     res.json({ message: 'Balance updated successfully', user: { _id: updated._id, name: updated.name, walletBalance: updated.walletBalance } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Update user's withdrawable earnings (adjusts totalDeposited)
+// @route   PUT /api/admin/users/:id/earnings
+const updateUserEarnings = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { earnings } = req.body;
+
+    if (earnings == null || isNaN(Number(earnings)) || Number(earnings) < 0) {
+      return res.status(400).json({ message: 'Earnings must be a non-negative number' });
+    }
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const desiredEarnings = Number(earnings);
+    if (desiredEarnings > user.walletBalance) {
+      return res.status(400).json({ message: `Earnings cannot exceed wallet balance (₹${user.walletBalance.toFixed(2)})` });
+    }
+
+    const newTotalDeposited = Math.max(0, user.walletBalance - desiredEarnings);
+    const oldEarnings = Math.max(0, user.walletBalance - (user.totalDeposited || 0));
+
+    await User.findByIdAndUpdate(id, { totalDeposited: newTotalDeposited }, { runValidators: false });
+
+    console.log(`📝 EARNINGS EDIT — User: ${user.name} (${id}), Earnings: ₹${oldEarnings.toFixed(2)} → ₹${desiredEarnings.toFixed(2)}, totalDeposited: ${user.totalDeposited || 0} → ${newTotalDeposited}`);
+
+    res.json({
+      message: 'Earnings updated successfully',
+      user: {
+        _id: user._id,
+        name: user.name,
+        walletBalance: user.walletBalance,
+        totalDeposited: newTotalDeposited,
+        earnings: desiredEarnings,
+      },
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -314,7 +381,16 @@ const processWalletRequest = async (req, res) => {
     }
 
     // Use findByIdAndUpdate to avoid full-document validation failures on users with null email/phone
-    await User.findByIdAndUpdate(user._id, { walletBalance: newBalance }, { runValidators: false });
+    const updateFields = { walletBalance: newBalance };
+    // Track deposit amount for earnings calculation (withdrawal limited to earnings only)
+    if (action === 'approve' && walletRequest.type === 'deposit') {
+      updateFields.$inc = { totalDeposited: walletRequest.amount };
+    }
+    if (updateFields.$inc) {
+      await User.findByIdAndUpdate(user._id, { walletBalance: newBalance, $inc: { totalDeposited: walletRequest.amount } }, { runValidators: false });
+    } else {
+      await User.findByIdAndUpdate(user._id, { walletBalance: newBalance }, { runValidators: false });
+    }
 
     // Record transaction if balance changed
     if (newBalance !== balBefore) {
@@ -669,6 +745,9 @@ const updateSettings = async (req, res) => {
       ludoGameDurationMinutes,
       ludoDummyRunningBattles,
       userWarning,
+      ludoCommTier1Max, ludoCommTier1Pct,
+      ludoCommTier2Max, ludoCommTier2Pct,
+      ludoCommTier3Pct,
     } = req.body;
 
     // Handle betsEnabled toggle (game engine)
@@ -699,6 +778,11 @@ const updateSettings = async (req, res) => {
       if (n >= 0 && n <= 50) settings.ludoDummyRunningBattles = n;
     }
     if (userWarning !== undefined) settings.userWarning = userWarning;
+    if (ludoCommTier1Max !== undefined) settings.ludoCommTier1Max = Number(ludoCommTier1Max);
+    if (ludoCommTier1Pct !== undefined) settings.ludoCommTier1Pct = Number(ludoCommTier1Pct);
+    if (ludoCommTier2Max !== undefined) settings.ludoCommTier2Max = Number(ludoCommTier2Max);
+    if (ludoCommTier2Pct !== undefined) settings.ludoCommTier2Pct = Number(ludoCommTier2Pct);
+    if (ludoCommTier3Pct !== undefined) settings.ludoCommTier3Pct = Number(ludoCommTier3Pct);
     await settings.save();
 
     res.json({ message: 'Settings updated', betsEnabled: typeof betsEnabled === 'boolean' ? betsEnabled : undefined });
@@ -867,7 +951,9 @@ module.exports = {
   getDashboardStats,
   getUsers,
   createUser,
+  updateUser,
   updateUserBalance,
+  updateUserEarnings,
   updateUserStatus,
   deleteUser,
   getWalletRequests,

@@ -33,7 +33,7 @@ class GameEngine {
 
     // ── Timing ──
     this.WAITING_TIME = 5000;         // 5s betting window
-    this.COUNTDOWN_SECONDS = 12;      // 12s gap between rounds
+    this.COUNTDOWN_SECONDS = 5;       // 5s gap between rounds
     this.TICK_INTERVAL = 100;         // 100ms per tick
     this.MULTIPLIER_INCREMENT = 0.03; // 0.3x per second (faster pace)
 

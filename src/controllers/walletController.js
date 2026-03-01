@@ -134,6 +134,11 @@ const createWithdrawalRequest = async (req, res) => {
 
     const user = await User.findById(req.user._id);
 
+    // Users can only withdraw earnings (balance minus total deposited)
+    const earnings = Math.max(0, user.walletBalance - (user.totalDeposited || 0));
+    if (amount > earnings) {
+      return res.status(400).json({ message: `You can only withdraw your earnings. Withdrawable: ₹${earnings.toFixed(2)}` });
+    }
     if (user.walletBalance < amount) {
       return res.status(400).json({ message: 'Insufficient balance' });
     }
@@ -191,6 +196,20 @@ const createWithdrawalRequest = async (req, res) => {
       request: walletRequest,
       newBalance: user.walletBalance,
     });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Get withdrawal info (balance, earnings, totalDeposited)
+// @route   GET /api/wallet/withdrawal-info
+const getWithdrawalInfo = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('walletBalance totalDeposited');
+    const totalDeposited = user.totalDeposited || 0;
+    const earnings = Math.max(0, user.walletBalance - totalDeposited);
+    res.json({ walletBalance: user.walletBalance, totalDeposited, earnings });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -256,6 +275,7 @@ module.exports = {
   getBalance,
   createDepositRequest,
   createWithdrawalRequest,
+  getWithdrawalInfo,
   getWalletHistory,
   getWalletTransactions,
 };

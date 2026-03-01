@@ -4,7 +4,9 @@ const {
   getDashboardStats,
   getUsers,
   createUser,
+  updateUser,
   updateUserBalance,
+  updateUserEarnings,
   updateUserStatus,
   deleteUser,
   getUserDetail,
@@ -44,9 +46,11 @@ router.use(adminOnly);
 router.get('/dashboard', getDashboardStats);
 router.get('/users', getUsers);
 router.post('/users', fullAdminOnly, createUser);
+router.put('/users/:id', fullAdminOnly, updateUser);
 router.get('/users/:id/detail', getUserDetail);
 router.get('/users/:id/transactions', getUserTransactions);
 router.put('/users/:id/balance', fullAdminOnly, updateUserBalance);
+router.put('/users/:id/earnings', fullAdminOnly, updateUserEarnings);
 router.put('/users/:id/status', fullAdminOnly, updateUserStatus);
 router.delete('/users/:id', fullAdminOnly, deleteUser);
 router.get('/wallet-requests', getWalletRequests);

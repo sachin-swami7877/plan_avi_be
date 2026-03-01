@@ -61,7 +61,7 @@ const sendOTP = async (req, res) => {
 
       const last10 = cleanPhone.slice(-10);
       let user = await User.findOne({
-        phone: { $regex: last10 + '$' },
+        $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
       });
 
       const otp = generateOTP();
@@ -206,7 +206,9 @@ const verifyOTP = async (req, res) => {
       }
 
       const last10 = cleanPhone.slice(-10);
-      user = await User.findOne({ phone: { $regex: last10 + '$' } });
+      user = await User.findOne({
+        $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
+      });
 
       if (!user) {
         // New user — verify against the pending OTP map
@@ -217,8 +219,8 @@ const verifyOTP = async (req, res) => {
           pendingPhoneOtps.delete(last10);
           return res.status(400).json({ message: 'OTP expired' });
         }
-        // OTP verified — create user now
-        user = await User.create({ phone: last10, name: null });
+        // OTP verified — find existing user (admin-created) or create new
+        user = await User.findOne({ phone: last10 }) || await User.create({ phone: last10, name: null });
         pendingPhoneOtps.delete(last10);
 
         const token = generateToken(user._id);
