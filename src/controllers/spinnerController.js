@@ -2,22 +2,33 @@ const User = require('../models/User');
 const SpinnerRecord = require('../models/SpinnerRecord');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 
-const SPIN_COST = 50;
-const MIN_BALANCE = 50;
+const VALID_SPIN_COSTS = [50, 100];
 
-// Weighted outcomes for admin profit: most Thank you, never iPhone/MacBook
-// thank_you 70%, 70 Rs 15%, 100 Rs 10%, 50 Rs 5%
-const OUTCOMES = [
-  { value: 'thank_you', weight: 70 },
+// ₹50 spin outcomes: thank_you 50%, ₹50 17%, ₹70 15%, ₹100 13%, ₹120 5%
+// Expected payout = 38, profit = ₹12 (24%)
+const OUTCOMES_50 = [
+  { value: 'thank_you', weight: 50 },
+  { value: '50', weight: 17 },
   { value: '70', weight: 15 },
-  { value: '100', weight: 10 },
-  { value: '50', weight: 5 },
+  { value: '100', weight: 13 },
+  { value: '120', weight: 5 },
 ];
 
-function getWeightedOutcome() {
-  const total = OUTCOMES.reduce((s, o) => s + o.weight, 0);
+// ₹100 spin outcomes: thank_you 40%, ₹50 14%, ₹100 17%, ₹120 14%, ₹170 10%, ₹200 5%
+// Expected payout = 67.8, profit = ₹32.2 (32.2%)
+const OUTCOMES_100 = [
+  { value: 'thank_you', weight: 40 },
+  { value: '50', weight: 14 },
+  { value: '100', weight: 17 },
+  { value: '120', weight: 14 },
+  { value: '170', weight: 10 },
+  { value: '200', weight: 5 },
+];
+
+function getWeightedOutcome(outcomes) {
+  const total = outcomes.reduce((s, o) => s + o.weight, 0);
   let r = Math.random() * total;
-  for (const o of OUTCOMES) {
+  for (const o of outcomes) {
     r -= o.weight;
     if (r <= 0) return o.value;
   }
@@ -27,53 +38,60 @@ function getWeightedOutcome() {
 // Round delay (ms) so response doesn't come instantly - spinner can sync with outcome
 const SPIN_ROUND_DELAY_MS = 800;
 
-// @desc    Play spinner (cost 50, requires balance >= 50)
+// @desc    Play spinner (cost 50 or 100)
 // @route   POST /api/spinner/play
 const playSpinner = async (req, res) => {
   try {
+    const spinCost = Number(req.body.spinCost) || 50;
+    if (!VALID_SPIN_COSTS.includes(spinCost)) {
+      return res.status(400).json({ message: 'Invalid spin cost' });
+    }
+
     const user = await User.findById(req.user._id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    if (user.walletBalance < MIN_BALANCE) {
-      return res.status(400).json({ message: `Minimum balance ₹${MIN_BALANCE} required to spin` });
+    if (user.walletBalance < spinCost) {
+      return res.status(400).json({ message: `Minimum balance ₹${spinCost} required to spin` });
     }
 
-    const outcome = getWeightedOutcome();
+    const outcomes = spinCost === 100 ? OUTCOMES_100 : OUTCOMES_50;
+    const outcome = getWeightedOutcome(outcomes);
     await new Promise((r) => setTimeout(r, SPIN_ROUND_DELAY_MS));
     const winAmount = outcome === 'thank_you' ? 0 : Number(outcome);
 
     // Pehle spin cost deduct, phir win amount add (e.g. 300 - 50 + 100 = 350)
     const balBefore = user.walletBalance;
-    user.walletBalance = user.walletBalance - SPIN_COST + winAmount;
+    user.walletBalance = user.walletBalance - spinCost + winAmount;
     await user.save();
 
     await SpinnerRecord.create({
       userId: user._id,
       outcome,
       winAmount,
-      spinCost: SPIN_COST,
+      spinCost,
       balanceAfter: user.walletBalance,
     });
 
     // Record spin cost debit
     await recordWalletTx(
-      user._id, 'debit', 'spin_cost', SPIN_COST,
-      'Spinner play — ₹50 deducted',
-      balBefore, balBefore - SPIN_COST
+      user._id, 'debit', 'spin_cost', spinCost,
+      `Spinner play — ₹${spinCost} deducted`,
+      balBefore, balBefore - spinCost
     );
     // Record win credit if any
     if (winAmount > 0) {
       await recordWalletTx(
         user._id, 'credit', 'spin_win', winAmount,
         `Spinner win — ₹${winAmount} credited`,
-        balBefore - SPIN_COST, user.walletBalance
+        balBefore - spinCost, user.walletBalance
       );
     }
 
     res.json({
       outcome,
       winAmount,
+      spinCost,
       newBalance: user.walletBalance,
       message: outcome === 'thank_you' ? 'Thank you!' : `You won ₹${winAmount}!`,
     });

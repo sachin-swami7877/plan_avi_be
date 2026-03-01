@@ -10,13 +10,11 @@ const { recordWalletTx } = require('../utils/recordWalletTx');
  *
  *  Profit-protection rules (priority order):
  *    1. No cashout below 1.00x
- *    2. If admin is in SIGNIFICANT daily loss → conservative range (not 1x only)
+ *    2. If admin is in SIGNIFICANT daily loss → conservative range
  *    3. If ANY bet ≥ ₹500 → tighter but varied distribution
- *    4. Base 10% of rounds crash at 1.00–1.20x
- *    5. If all bets are small (≤₹100) → generous multipliers (up to 7x)
- *    6. Normal bets → balanced distribution capped at 7.00x
- *    7. No user-bet round → random 1–20x (cosmetic)
- *    8. 5-second gap between rounds
+ *    4. Balanced distribution: 40% below 2x, 10% above 6x (max 8x)
+ *    5. No user-bet round → random 1–20x (cosmetic)
+ *    6. 5-second gap between rounds
  * ═══════════════════════════════════════════════════════════════════
  */
 
@@ -249,14 +247,33 @@ class GameEngine {
       return;
     }
 
-    // ── PRIORITY 3: ADMIN BULK CRASH (same value for N user-bet rounds) ──
+    // ── PRIORITY 3: ADMIN BULK CRASH (3 modes: exact, range, auto-random) ──
     if (this.adminBulkCrash && this.adminBulkCrash.remaining > 0 && hasRealBets) {
-      const { crashAt, remaining, total } = this.adminBulkCrash;
-      this.adminBulkCrash.remaining = remaining - 1;
-      this.currentRound.crashMultiplier = Number(Number(crashAt).toFixed(2));
+      const bulk = this.adminBulkCrash;
+      bulk.remaining -= 1;
+
+      let bulkCrashPoint;
+      if (bulk.mode === 'exact') {
+        // Fixed value every round
+        bulkCrashPoint = bulk.crashAt;
+      } else if (bulk.mode === 'range') {
+        // Random within admin-set min-max range
+        bulkCrashPoint = Number((bulk.min + Math.random() * (bulk.max - bulk.min)).toFixed(2));
+      } else {
+        // mode === 'auto' → balanced distribution (same as RULE 3)
+        const r = Math.random();
+        if (r < 0.20) bulkCrashPoint = Number((1.0 + Math.random() * 0.30).toFixed(2));
+        else if (r < 0.40) bulkCrashPoint = Number((1.30 + Math.random() * 0.70).toFixed(2));
+        else if (r < 0.60) bulkCrashPoint = Number((2.0 + Math.random() * 1.0).toFixed(2));
+        else if (r < 0.75) bulkCrashPoint = Number((3.0 + Math.random() * 1.50).toFixed(2));
+        else if (r < 0.90) bulkCrashPoint = Number((4.50 + Math.random() * 1.50).toFixed(2));
+        else bulkCrashPoint = Number((6.0 + Math.random() * 1.0).toFixed(2));
+      }
+
+      this.currentRound.crashMultiplier = Number(bulkCrashPoint.toFixed(2));
       await this.currentRound.save();
-      console.log(`👑 ADMIN BULK [${this.adminBulkCrash.remaining}/${total} left] → crash at ${crashAt}x`);
-      if (this.adminBulkCrash.remaining <= 0) {
+      console.log(`👑 ADMIN BULK [${bulk.remaining}/${bulk.total} left] (${bulk.mode}) → crash at ${bulkCrashPoint}x`);
+      if (bulk.remaining <= 0) {
         this.adminBulkCrash = null;
         console.log('👑 ADMIN BULK CRASH completed — cleared');
       }
@@ -267,9 +284,20 @@ class GameEngine {
 
     let crashPoint;
 
-    // ── RULE 0: No real bets → cosmetic round (1x – 20x) ──
+    // ── RULE 0: No real bets → cosmetic round (balanced distribution) ──
     if (!hasRealBets) {
-      crashPoint = Number((1 + Math.random() * 19).toFixed(2));
+      const cosmeticRand = Math.random();
+      if (cosmeticRand < 0.10) {
+        crashPoint = 1.00;                                            // exactly 1x (10%)
+      } else if (cosmeticRand < 0.30) {
+        crashPoint = Number((1.0 + Math.random() * 2.0).toFixed(2)); // 1x–3x (20%)
+      } else if (cosmeticRand < 0.40) {
+        crashPoint = Number((3.0 + Math.random() * 1.0).toFixed(2)); // 3x–4x (10%)
+      } else if (cosmeticRand < 0.60) {
+        crashPoint = Number((4.0 + Math.random() * 2.0).toFixed(2)); // 4x–6x (20%)
+      } else {
+        crashPoint = Number((6.0 + Math.random() * 4.0).toFixed(2)); // 6x–10x (40%)
+      }
       console.log(`📈 No bets — cosmetic crash at ${crashPoint}x`);
       this.currentRound.crashMultiplier = crashPoint;
       await this.currentRound.save();
@@ -316,48 +344,25 @@ class GameEngine {
       return;
     }
 
-    // ── RULE 3: Base 10% crash at 1.00–1.20x (keeps house edge) ──
-    if (Math.random() < 0.10) {
-      crashPoint = Number((1.0 + Math.random() * 0.20).toFixed(2)); // 1.00–1.20
-      console.log(`🎯 Base 10% rule → crash at ${crashPoint}x`);
-      this.currentRound.crashMultiplier = crashPoint;
-      await this.currentRound.save();
-      return;
-    }
-
-    // ── RULE 4: Small bets (all ≤ ₹100) → generous multipliers ──
-    const allSmallBets = bets.every((b) => b.amount <= 100);
-
-    if (allSmallBets) {
-      const rand = Math.random();
-      if (rand < 0.10) {
-        crashPoint = Number((1.0 + Math.random() * 0.30).toFixed(2));  // 1.00–1.30 (10%)
-      } else if (rand < 0.30) {
-        crashPoint = Number((1.30 + Math.random() * 0.70).toFixed(2)); // 1.30–2.00 (20%)
-      } else if (rand < 0.55) {
-        crashPoint = Number((2.0 + Math.random() * 1.50).toFixed(2));  // 2.00–3.50 (25%)
-      } else if (rand < 0.80) {
-        crashPoint = Number((3.50 + Math.random() * 2.0).toFixed(2));  // 3.50–5.50 (25%)
-      } else {
-        crashPoint = Number((5.50 + Math.random() * 1.50).toFixed(2)); // 5.50–7.00 (20%)
-      }
-      console.log(`🟢 Small bets (max ₹${maxBet}) → generous crash at ${crashPoint}x`);
+    // ── RULE 3: Balanced distribution for all normal bets ──
+    // Truly random feel — low crashes happen naturally, high crashes are rare
+    // 40% crash below 2x → admin profits on most rounds
+    // Only 10% go above 6x → rare big multipliers keep players engaged
+    const rand = Math.random();
+    if (rand < 0.20) {
+      crashPoint = Number((1.0 + Math.random() * 0.30).toFixed(2));   // 1.00–1.30 (20%)
+    } else if (rand < 0.40) {
+      crashPoint = Number((1.30 + Math.random() * 0.70).toFixed(2));  // 1.30–2.00 (20%)
+    } else if (rand < 0.60) {
+      crashPoint = Number((2.0 + Math.random() * 1.0).toFixed(2));    // 2.00–3.00 (20%)
+    } else if (rand < 0.75) {
+      crashPoint = Number((3.0 + Math.random() * 1.50).toFixed(2));   // 3.00–4.50 (15%)
+    } else if (rand < 0.90) {
+      crashPoint = Number((4.50 + Math.random() * 1.50).toFixed(2));  // 4.50–6.00 (15%)
     } else {
-      // ── RULE 5: Medium bets → balanced distribution ──
-      const rand = Math.random();
-      if (rand < 0.15) {
-        crashPoint = Number((1.0 + Math.random() * 0.30).toFixed(2));  // 1.00–1.30 (15%)
-      } else if (rand < 0.40) {
-        crashPoint = Number((1.30 + Math.random() * 0.70).toFixed(2)); // 1.30–2.00 (25%)
-      } else if (rand < 0.65) {
-        crashPoint = Number((2.0 + Math.random() * 1.50).toFixed(2));  // 2.00–3.50 (25%)
-      } else if (rand < 0.85) {
-        crashPoint = Number((3.50 + Math.random() * 2.0).toFixed(2));  // 3.50–5.50 (20%)
-      } else {
-        crashPoint = Number((5.50 + Math.random() * 1.50).toFixed(2)); // 5.50–7.00 (15%)
-      }
-      console.log(`🔵 Medium bets (max ₹${maxBet}) → crash at ${crashPoint}x`);
+      crashPoint = Number((6.0 + Math.random() * 1.0).toFixed(2));    // 6.00–7.00 (10%)
     }
+    console.log(`🎲 Normal bets (max ₹${maxBet}) → crash at ${crashPoint}x`);
 
     // ── Hard cap at 7x ──
     crashPoint = Math.min(crashPoint, this.MAX_MULTIPLIER_CAP);
@@ -711,12 +716,25 @@ class GameEngine {
     return this.adminNextCrash;
   }
 
-  // ── Bulk crash: next N user-bet rounds at same multiplier ──
-  setBulkCrash(count, crashAt) {
-    if (crashAt < 1) throw new Error('Crash multiplier must be at least 1.00');
+  // ── Bulk crash: 3 modes ──
+  // mode 'exact': fixed crashAt for every round
+  // mode 'range': random between min and max each round
+  // mode 'auto':  balanced distribution each round
+  setBulkCrash(count, { mode = 'exact', crashAt, min, max } = {}) {
     if (count < 1 || count > 100) throw new Error('Count must be between 1 and 100');
-    this.adminBulkCrash = { crashAt: Number(crashAt), total: Number(count), remaining: Number(count) };
-    console.log(`👑 Admin set BULK crash: next ${count} user-bet rounds at ${crashAt}x`);
+    if (mode === 'exact') {
+      if (!crashAt || crashAt < 1) throw new Error('crashAt must be >= 1');
+      this.adminBulkCrash = { mode, crashAt: Number(crashAt), total: Number(count), remaining: Number(count) };
+      console.log(`👑 Admin set BULK crash: next ${count} rounds at exactly ${crashAt}x`);
+    } else if (mode === 'range') {
+      if (!min || !max || min < 1 || max < min) throw new Error('min must be >= 1 and max must be >= min');
+      this.adminBulkCrash = { mode, min: Number(min), max: Number(max), total: Number(count), remaining: Number(count) };
+      console.log(`👑 Admin set BULK crash: next ${count} rounds random ${min}x–${max}x`);
+    } else {
+      // auto mode
+      this.adminBulkCrash = { mode: 'auto', total: Number(count), remaining: Number(count) };
+      console.log(`👑 Admin set BULK crash: next ${count} rounds with auto balanced distribution`);
+    }
   }
 
   clearBulkCrash() {

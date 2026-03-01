@@ -65,7 +65,7 @@ const sendOTP = async (req, res) => {
       });
 
       const otp = generateOTP();
-      const otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
+      const otpExpiry = new Date(Date.now() + 2 * 60 * 1000);
 
       if (user) {
         if (user.status === 'blocked') {
@@ -116,7 +116,7 @@ const sendOTP = async (req, res) => {
     }
 
     const otp = generateOTP();
-    const otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
+    const otpExpiry = new Date(Date.now() + 2 * 60 * 1000);
 
     if (user) {
       user.otp = otp;
@@ -155,7 +155,7 @@ const sendOTP = async (req, res) => {
               <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
                 <h1 style="color: #e11d48; font-size: 36px; letter-spacing: 8px; margin: 0; font-weight: bold;">${otp}</h1>
               </div>
-              <p style="color: #666; font-size: 14px; text-align: center;">This OTP is valid for 5 minutes. Do not share it with anyone.</p>
+              <p style="color: #666; font-size: 14px; text-align: center;">This OTP is valid for 2 minutes. Do not share it with anyone.</p>
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">
               <p style="color: #999; font-size: 12px; margin: 0; text-align: center;">©RushKaro Ludo - All rights reserved</p>
             </div>

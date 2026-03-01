@@ -743,20 +743,30 @@ const clearNextCrash = async (req, res) => {
   }
 };
 
-// @desc    Set bulk crash: next N user-bet rounds at same multiplier
+// @desc    Set bulk crash: 3 modes - exact, range, auto
 // @route   POST /api/admin/game/set-bulk-crash
 const setBulkCrash = async (req, res) => {
   try {
-    const { count, crashAt } = req.body;
-    if (typeof crashAt !== 'number' || crashAt < 1) {
-      return res.status(400).json({ message: 'crashAt must be a number >= 1' });
-    }
+    const { count, mode = 'exact', crashAt, min, max } = req.body;
     if (typeof count !== 'number' || count < 1 || count > 100) {
       return res.status(400).json({ message: 'count must be between 1 and 100' });
     }
+    if (mode === 'exact') {
+      if (typeof crashAt !== 'number' || crashAt < 1) {
+        return res.status(400).json({ message: 'crashAt must be a number >= 1' });
+      }
+    } else if (mode === 'range') {
+      if (typeof min !== 'number' || min < 1) {
+        return res.status(400).json({ message: 'min must be a number >= 1' });
+      }
+      if (typeof max !== 'number' || max < min) {
+        return res.status(400).json({ message: 'max must be >= min' });
+      }
+    }
     const gameEngine = req.app.get('gameEngine');
-    gameEngine.setBulkCrash(count, crashAt);
-    res.json({ message: `Next ${count} user-bet rounds will crash at ${crashAt}x`, bulkCrash: gameEngine.adminBulkCrash });
+    gameEngine.setBulkCrash(count, { mode, crashAt, min, max });
+    const label = mode === 'exact' ? `at ${crashAt}x` : mode === 'range' ? `random ${min}x–${max}x` : 'auto random';
+    res.json({ message: `Next ${count} rounds: ${label}`, bulkCrash: gameEngine.adminBulkCrash });
   } catch (error) {
     console.error(error);
     res.status(400).json({ message: error.message });
