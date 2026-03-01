@@ -10,13 +10,13 @@ const { recordWalletTx } = require('../utils/recordWalletTx');
  *
  *  Profit-protection rules (priority order):
  *    1. No cashout below 1.00x
- *    2. If admin is in daily loss OR last-5-round loss → crash at 1.00–1.05
- *    3. If ANY bet ≥ ₹500 → 80% crash at 1.00x, 20% cap at 2.00x
- *    4. Base 30% of ALL rounds crash at 1.00x
+ *    2. If admin is in SIGNIFICANT daily loss → conservative range (not 1x only)
+ *    3. If ANY bet ≥ ₹500 → tighter but varied distribution
+ *    4. Base 10% of rounds crash at 1.00–1.20x
  *    5. If all bets are small (≤₹100) → generous multipliers (up to 7x)
- *    6. Normal bets → standard distribution capped at 7.00x
+ *    6. Normal bets → balanced distribution capped at 7.00x
  *    7. No user-bet round → random 1–20x (cosmetic)
- *    8. 12-second gap between rounds
+ *    8. 5-second gap between rounds
  * ═══════════════════════════════════════════════════════════════════
  */
 
@@ -40,8 +40,8 @@ class GameEngine {
     // ── Profit-protection knobs ──
     this.MAX_MULTIPLIER_CAP = 7.0;    // Hard cap when users have bets
     this.HIGH_BET_THRESHOLD = 500;    // ₹500+
-    this.HIGH_BET_CRASH_RATE = 0.80;  // 80% crash at 1x for high bets
-    this.BASE_CRASH_AT_1X_RATE = 0.30; // 30% rounds crash at 1x
+    this.LOSS_DAILY_THRESHOLD = -1000; // Trigger loss-recovery only if daily loss > ₹1000
+    this.LOSS_RECENT_THRESHOLD = -500; // Trigger loss-recovery only if last-5 loss > ₹500
   }
 
   /* ═══════════════════════ LIFECYCLE ═══════════════════════ */
@@ -169,42 +169,49 @@ class GameEngine {
     }
 
     const maxBet = Math.max(...bets.map((b) => b.amount));
-    const totalBetAmount = bets.reduce((s, b) => s + b.amount, 0);
 
-    // ── RULE 1: Daily P&L + Last-5 rounds check ──
+    // ── RULE 1: Loss recovery (only for SIGNIFICANT losses) ──
     const dailyPL = await this.getDailyProfitLoss();
     const last5PL = await this.getLastNRoundsPL(5);
 
-    if (dailyPL < 0 || last5PL < 0) {
-      // Admin is in loss → crash early to recover
-      crashPoint = Number((1.0 + Math.random() * 0.05).toFixed(2)); // 1.00–1.05
+    if (dailyPL < this.LOSS_DAILY_THRESHOLD || last5PL < this.LOSS_RECENT_THRESHOLD) {
+      // Significant loss — be conservative but still varied
+      const rand = Math.random();
+      if (rand < 0.35) {
+        crashPoint = Number((1.0 + Math.random() * 0.15).toFixed(2));  // 1.00–1.15 (35%)
+      } else if (rand < 0.65) {
+        crashPoint = Number((1.15 + Math.random() * 0.55).toFixed(2)); // 1.15–1.70 (30%)
+      } else {
+        crashPoint = Number((1.70 + Math.random() * 1.0).toFixed(2));  // 1.70–2.70 (35%)
+      }
       console.log(
-        `⚠️  Admin LOSS (daily: ₹${dailyPL.toFixed(0)}, last5: ₹${last5PL.toFixed(0)}) → crash at ${crashPoint}x to recover`
+        `⚠️  Loss recovery (daily: ₹${dailyPL.toFixed(0)}, last5: ₹${last5PL.toFixed(0)}) → crash at ${crashPoint}x`
       );
       this.currentRound.crashMultiplier = crashPoint;
       await this.currentRound.save();
       return;
     }
 
-    // ── RULE 2: High bet (≥₹500) → 80% crash at 1x ──
+    // ── RULE 2: High bet (≥₹500) → tighter but varied distribution ──
     if (maxBet >= this.HIGH_BET_THRESHOLD) {
-      if (Math.random() < this.HIGH_BET_CRASH_RATE) {
-        crashPoint = 1.0;
-        console.log(`💰 High bet ₹${maxBet} → crash at 1.00x (80% rule)`);
+      const rand = Math.random();
+      if (rand < 0.30) {
+        crashPoint = Number((1.0 + Math.random() * 0.20).toFixed(2));  // 1.00–1.20 (30%)
+      } else if (rand < 0.60) {
+        crashPoint = Number((1.20 + Math.random() * 0.80).toFixed(2)); // 1.20–2.00 (30%)
       } else {
-        // 20%: let it run but cap very low
-        crashPoint = Number((1.0 + Math.random() * 1.0).toFixed(2)); // 1.00–2.00
-        console.log(`💰 High bet ₹${maxBet} → capped crash at ${crashPoint}x (20% mercy)`);
+        crashPoint = Number((2.0 + Math.random() * 1.50).toFixed(2));  // 2.00–3.50 (40%)
       }
+      console.log(`💰 High bet ₹${maxBet} → crash at ${crashPoint}x`);
       this.currentRound.crashMultiplier = crashPoint;
       await this.currentRound.save();
       return;
     }
 
-    // ── RULE 3: Base 30% crash at 1.00x ──
-    if (Math.random() < this.BASE_CRASH_AT_1X_RATE) {
-      crashPoint = Number((1.0 + Math.random() * 0.03).toFixed(2)); // 1.00–1.03
-      console.log(`🎯 Base 30% rule → crash at ${crashPoint}x`);
+    // ── RULE 3: Base 10% crash at 1.00–1.20x (keeps house edge) ──
+    if (Math.random() < 0.10) {
+      crashPoint = Number((1.0 + Math.random() * 0.20).toFixed(2)); // 1.00–1.20
+      console.log(`🎯 Base 10% rule → crash at ${crashPoint}x`);
       this.currentRound.crashMultiplier = crashPoint;
       await this.currentRound.save();
       return;
@@ -214,29 +221,32 @@ class GameEngine {
     const allSmallBets = bets.every((b) => b.amount <= 100);
 
     if (allSmallBets) {
-      // Friendly for small bets — keeps users engaged / coming back
       const rand = Math.random();
-      if (rand < 0.15) {
-        crashPoint = Number((1.1 + Math.random() * 0.5).toFixed(2));   // 1.1–1.6
-      } else if (rand < 0.40) {
-        crashPoint = Number((1.6 + Math.random() * 1.4).toFixed(2));   // 1.6–3.0
-      } else if (rand < 0.70) {
-        crashPoint = Number((3.0 + Math.random() * 2.0).toFixed(2));   // 3.0–5.0
+      if (rand < 0.10) {
+        crashPoint = Number((1.0 + Math.random() * 0.30).toFixed(2));  // 1.00–1.30 (10%)
+      } else if (rand < 0.30) {
+        crashPoint = Number((1.30 + Math.random() * 0.70).toFixed(2)); // 1.30–2.00 (20%)
+      } else if (rand < 0.55) {
+        crashPoint = Number((2.0 + Math.random() * 1.50).toFixed(2));  // 2.00–3.50 (25%)
+      } else if (rand < 0.80) {
+        crashPoint = Number((3.50 + Math.random() * 2.0).toFixed(2));  // 3.50–5.50 (25%)
       } else {
-        crashPoint = Number((5.0 + Math.random() * 2.0).toFixed(2));   // 5.0–7.0
+        crashPoint = Number((5.50 + Math.random() * 1.50).toFixed(2)); // 5.50–7.00 (20%)
       }
       console.log(`🟢 Small bets (max ₹${maxBet}) → generous crash at ${crashPoint}x`);
     } else {
-      // ── RULE 5: Medium bets → standard distribution ──
+      // ── RULE 5: Medium bets → balanced distribution ──
       const rand = Math.random();
-      if (rand < 0.30) {
-        crashPoint = Number((1.05 + Math.random() * 0.45).toFixed(2)); // 1.05–1.50
-      } else if (rand < 0.60) {
-        crashPoint = Number((1.5 + Math.random() * 1.0).toFixed(2));   // 1.50–2.50
+      if (rand < 0.15) {
+        crashPoint = Number((1.0 + Math.random() * 0.30).toFixed(2));  // 1.00–1.30 (15%)
+      } else if (rand < 0.40) {
+        crashPoint = Number((1.30 + Math.random() * 0.70).toFixed(2)); // 1.30–2.00 (25%)
+      } else if (rand < 0.65) {
+        crashPoint = Number((2.0 + Math.random() * 1.50).toFixed(2));  // 2.00–3.50 (25%)
       } else if (rand < 0.85) {
-        crashPoint = Number((2.5 + Math.random() * 2.0).toFixed(2));   // 2.50–4.50
+        crashPoint = Number((3.50 + Math.random() * 2.0).toFixed(2));  // 3.50–5.50 (20%)
       } else {
-        crashPoint = Number((4.5 + Math.random() * 2.5).toFixed(2));   // 4.50–7.00
+        crashPoint = Number((5.50 + Math.random() * 1.50).toFixed(2)); // 5.50–7.00 (15%)
       }
       console.log(`🔵 Medium bets (max ₹${maxBet}) → crash at ${crashPoint}x`);
     }
@@ -315,12 +325,7 @@ class GameEngine {
       this._resolveRunningPhase = resolve;
 
       this.gameInterval = setInterval(() => {
-        // Emit current multiplier
-        this.io.emit('game:tick', {
-          multiplier: Number(this.currentMultiplier.toFixed(2)),
-        });
-
-        // Check crash
+        // Check crash FIRST — stop before emitting a value above crash target
         if (this.currentMultiplier >= this.currentRound.crashMultiplier) {
           clearInterval(this.gameInterval);
           this.gameInterval = null;
@@ -329,6 +334,11 @@ class GameEngine {
           resolve();
           return;
         }
+
+        // Emit current multiplier (guaranteed below crash target)
+        this.io.emit('game:tick', {
+          multiplier: Number(this.currentMultiplier.toFixed(2)),
+        });
 
         // Increment for next tick
         this.currentMultiplier += this.MULTIPLIER_INCREMENT;
@@ -344,18 +354,21 @@ class GameEngine {
     if (!this.isRunning || !this.currentRound) {
       throw new Error('No round is running');
     }
-    this.currentRound.crashMultiplier = Number(this.currentMultiplier.toFixed(2));
-    await this.currentRound.save();
 
+    // Stop ticks IMMEDIATELY — must happen before any async DB write
     if (this.gameInterval) {
       clearInterval(this.gameInterval);
       this.gameInterval = null;
     }
     this.isRunning = false;
+
+    this.currentRound.crashMultiplier = Number(this.currentMultiplier.toFixed(2));
+
     if (this._resolveRunningPhase) {
       this._resolveRunningPhase();
       this._resolveRunningPhase = null;
     }
+    // DB save happens in handleCrash() which runs after resolve
   }
 
   /* ═══════════════════════ CRASH HANDLER ═══════════════════════ */
@@ -363,17 +376,19 @@ class GameEngine {
   async handleCrash() {
     const crashMultiplier = this.currentRound.crashMultiplier;
 
-    this.currentRound.status = 'crashed';
-    this.currentRound.crashedAt = new Date();
-    await this.currentRound.save();
-
-    // Broadcast crash
+    // Broadcast crash IMMEDIATELY via socket — before any DB writes
+    // so the frontend stops the multiplier display instantly
     this.io.emit('game:crash', {
       roundId: this.currentRound.roundId,
       crashMultiplier: Number(crashMultiplier.toFixed(2)),
     });
 
     console.log(`💥 Round ${this.currentRound.roundId} — Crashed at ${crashMultiplier.toFixed(2)}x`);
+
+    // Now do DB writes (these can take 50-200ms, frontend already knows to stop)
+    this.currentRound.status = 'crashed';
+    this.currentRound.crashedAt = new Date();
+    await this.currentRound.save();
 
     // Settle all bets that didn't cash out — they lose
     const activeBets = await Bet.find({
