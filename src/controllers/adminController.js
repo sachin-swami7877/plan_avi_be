@@ -289,6 +289,7 @@ const updateUserEarnings = async (req, res) => {
 
     await User.findByIdAndUpdate(id, { totalDeposited: newTotalDeposited }, { runValidators: false });
 
+    
     console.log(`📝 EARNINGS EDIT — User: ${user.name} (${id}), Earnings: ₹${oldEarnings.toFixed(2)} → ₹${desiredEarnings.toFixed(2)}, totalDeposited: ${user.totalDeposited || 0} → ${newTotalDeposited}`);
 
     res.json({
