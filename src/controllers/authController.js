@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { sendOtpSms } = require('../services/smsIndiaHub');
 
@@ -410,6 +411,202 @@ const findEmailByPhone = async (req, res) => {
   }
 };
 
+// ──────────────────────── ADMIN AUTH ────────────────────────
+
+// Helper: find admin/manager user by phone (last 10 digits)
+const findAdminByPhone = async (rawPhone) => {
+  const cleanPhone = (typeof rawPhone === 'string' ? rawPhone.trim() : '').replace(/[^0-9]/g, '');
+  if (!cleanPhone || cleanPhone.length < 10) return { error: 'Please enter a valid 10-digit mobile number', status: 400 };
+  const last10 = cleanPhone.slice(-10);
+  const user = await User.findOne({
+    $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
+  });
+  if (!user) return { error: 'No account found with this mobile number', status: 404 };
+  if (user.role !== 'admin' && user.role !== 'manager') return { error: 'Access denied. Admin or Manager role required.', status: 403 };
+  if (user.status === 'blocked') return { error: 'Your account has been blocked. Please contact support.', status: 403 };
+  if (user.status === 'inactive') return { error: 'Your account is inactive. Please contact support.', status: 403 };
+  return { user, last10 };
+};
+
+// @desc    Send OTP for admin login (admin/manager only)
+// @route   POST /api/auth/admin/send-otp
+const adminSendOTP = async (req, res) => {
+  try {
+    const result = await findAdminByPhone(req.body.phone);
+    if (result.error) return res.status(result.status).json({ message: result.error });
+    const { user, last10 } = result;
+
+    const otp = generateOTP();
+    const otpExpiry = new Date(Date.now() + 2 * 60 * 1000);
+    await User.updateOne({ _id: user._id }, { otp, otpExpiry });
+
+    try {
+      await sendOtpSms(last10, otp);
+      console.log(`\n📱 Admin SMS OTP sent to ${last10}: ${otp}\n`);
+      return res.json({ message: 'OTP sent successfully to your mobile number' });
+    } catch (smsError) {
+      console.error('Admin SMS sending error:', smsError);
+      return res.status(500).json({ message: 'Failed to send SMS. Please try again.' });
+    }
+  } catch (error) {
+    console.error('Admin send OTP error:', error);
+    return res.status(400).json({ message: error.message || 'Failed to send OTP' });
+  }
+};
+
+// @desc    Verify OTP for admin login (admin/manager only)
+// @route   POST /api/auth/admin/verify-otp
+const adminVerifyOTP = async (req, res) => {
+  try {
+    const result = await findAdminByPhone(req.body.phone);
+    if (result.error) return res.status(result.status).json({ message: result.error });
+    const { user } = result;
+
+    const otp = typeof req.body.otp === 'string' ? req.body.otp.trim() : '';
+    if (!otp) return res.status(400).json({ message: 'OTP is required' });
+    if (user.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
+    if (new Date() > user.otpExpiry) return res.status(400).json({ message: 'OTP expired' });
+
+    await User.updateOne({ _id: user._id }, { otp: null, otpExpiry: null });
+    const token = generateToken(user._id);
+
+    res.json({
+      _id: user._id, name: user.name, email: user.email, phone: user.phone,
+      role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin,
+      status: user.status, token,
+    });
+  } catch (error) {
+    console.error('Admin verify OTP error:', error);
+    return res.status(400).json({ message: error.message || 'Verification failed' });
+  }
+};
+
+// @desc    Login admin with mobile + password
+// @route   POST /api/auth/admin/password-login
+const adminPasswordLogin = async (req, res) => {
+  try {
+    const rawPhone = typeof req.body.phone === 'string' ? req.body.phone.trim() : '';
+    const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+    const password = typeof req.body.password === 'string' ? req.body.password : '';
+
+    if (!cleanPhone || cleanPhone.length < 10) {
+      return res.status(400).json({ message: 'Please enter a valid 10-digit mobile number' });
+    }
+    if (!password) return res.status(400).json({ message: 'Password is required' });
+
+    const last10 = cleanPhone.slice(-10);
+    const user = await User.findOne({
+      $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
+    }).select('+password');
+
+    if (!user) return res.status(404).json({ message: 'No account found with this mobile number' });
+    if (user.role !== 'admin' && user.role !== 'manager') return res.status(403).json({ message: 'Access denied. Admin or Manager role required.' });
+    if (user.status === 'blocked') return res.status(403).json({ message: 'Your account has been blocked.' });
+    if (user.status === 'inactive') return res.status(403).json({ message: 'Your account is inactive.' });
+
+    if (!user.password) {
+      return res.status(400).json({ message: 'Password not set. Please use OTP login or set a password via Forgot Password.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(401).json({ message: 'Invalid password' });
+
+    const token = generateToken(user._id);
+
+    res.json({
+      _id: user._id, name: user.name, email: user.email, phone: user.phone,
+      role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin,
+      status: user.status, token,
+    });
+  } catch (error) {
+    console.error('Admin password login error:', error);
+    return res.status(400).json({ message: error.message || 'Login failed' });
+  }
+};
+
+// @desc    Send OTP for admin forgot password
+// @route   POST /api/auth/admin/forgot-password/send-otp
+const adminForgotPasswordSendOTP = async (req, res) => {
+  try {
+    const result = await findAdminByPhone(req.body.phone);
+    if (result.error) return res.status(result.status).json({ message: result.error });
+    const { user, last10 } = result;
+
+    const otp = generateOTP();
+    const otpExpiry = new Date(Date.now() + 2 * 60 * 1000);
+    await User.updateOne({ _id: user._id }, { otp, otpExpiry });
+
+    try {
+      await sendOtpSms(last10, otp);
+      console.log(`\n📱 Admin forgot-password OTP sent to ${last10}: ${otp}\n`);
+      return res.json({ message: 'OTP sent successfully to your mobile number' });
+    } catch (smsError) {
+      console.error('Admin forgot-password SMS error:', smsError);
+      return res.status(500).json({ message: 'Failed to send SMS. Please try again.' });
+    }
+  } catch (error) {
+    console.error('Admin forgot-password send OTP error:', error);
+    return res.status(400).json({ message: error.message || 'Failed to send OTP' });
+  }
+};
+
+// @desc    Verify OTP for admin forgot password
+// @route   POST /api/auth/admin/forgot-password/verify-otp
+const adminForgotPasswordVerifyOTP = async (req, res) => {
+  try {
+    const result = await findAdminByPhone(req.body.phone);
+    if (result.error) return res.status(result.status).json({ message: result.error });
+    const { user } = result;
+
+    const otp = typeof req.body.otp === 'string' ? req.body.otp.trim() : '';
+    if (!otp) return res.status(400).json({ message: 'OTP is required' });
+    if (user.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
+    if (new Date() > user.otpExpiry) return res.status(400).json({ message: 'OTP expired' });
+
+    await User.updateOne({ _id: user._id }, { otp: null, otpExpiry: null });
+    const resetToken = jwt.sign({ id: user._id, purpose: 'password-reset' }, process.env.JWT_SECRET, { expiresIn: '5m' });
+
+    res.json({ message: 'OTP verified. You can now reset your password.', resetToken });
+  } catch (error) {
+    console.error('Admin forgot-password verify OTP error:', error);
+    return res.status(400).json({ message: error.message || 'Verification failed' });
+  }
+};
+
+// @desc    Reset admin password (after OTP verification)
+// @route   POST /api/auth/admin/reset-password
+const adminResetPassword = async (req, res) => {
+  try {
+    const { resetToken, newPassword, confirmPassword } = req.body;
+
+    if (!resetToken) return res.status(400).json({ message: 'Reset token is required. Please verify OTP first.' });
+    if (!newPassword || newPassword.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    if (newPassword !== confirmPassword) return res.status(400).json({ message: 'Passwords do not match' });
+
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ message: 'Reset token expired or invalid. Please start over.' });
+    }
+
+    if (decoded.purpose !== 'password-reset') return res.status(401).json({ message: 'Invalid reset token.' });
+
+    const user = await User.findById(decoded.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.role !== 'admin' && user.role !== 'manager') return res.status(403).json({ message: 'Access denied.' });
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    await User.updateOne({ _id: user._id }, { password: hashedPassword });
+
+    res.json({ message: 'Password reset successfully. You can now login with your new password.' });
+  } catch (error) {
+    console.error('Admin reset password error:', error);
+    return res.status(400).json({ message: error.message || 'Password reset failed' });
+  }
+};
+
 module.exports = {
   sendOTP,
   verifyOTP,
@@ -417,4 +614,10 @@ module.exports = {
   updateProfile,
   getMe,
   findEmailByPhone,
+  adminSendOTP,
+  adminVerifyOTP,
+  adminPasswordLogin,
+  adminForgotPasswordSendOTP,
+  adminForgotPasswordVerifyOTP,
+  adminResetPassword,
 };

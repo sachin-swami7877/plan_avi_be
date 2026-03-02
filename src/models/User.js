@@ -66,6 +66,11 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  password: {
+    type: String,
+    default: null,
+    select: false
+  },
   otp: {
     type: String,
     default: null
