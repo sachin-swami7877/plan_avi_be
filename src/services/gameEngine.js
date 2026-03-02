@@ -293,10 +293,12 @@ class GameEngine {
         crashPoint = Number((1.0 + Math.random() * 2.0).toFixed(2)); // 1x–3x (20%)
       } else if (cosmeticRand < 0.40) {
         crashPoint = Number((3.0 + Math.random() * 1.0).toFixed(2)); // 3x–4x (10%)
-      } else if (cosmeticRand < 0.60) {
-        crashPoint = Number((4.0 + Math.random() * 2.0).toFixed(2)); // 4x–6x (20%)
+      } else if (cosmeticRand < 0.55) {
+        crashPoint = Number((4.0 + Math.random() * 2.0).toFixed(2)); // 4x–6x (15%)
+      } else if (cosmeticRand < 0.85) {
+        crashPoint = Number((6.0 + Math.random() * 4.0).toFixed(2)); // 6x–10x (30%)
       } else {
-        crashPoint = Number((6.0 + Math.random() * 4.0).toFixed(2)); // 6x–10x (40%)
+        crashPoint = Number((10.0 + Math.random() * 5.0).toFixed(2)); // 10x–15x (15%)
       }
       console.log(`📈 No bets — cosmetic crash at ${crashPoint}x`);
       this.currentRound.crashMultiplier = crashPoint;
@@ -438,11 +440,22 @@ class GameEngine {
       this._resolveRunningPhase = resolve;
 
       this.gameInterval = setInterval(() => {
+        // Safety cap at 15x — unless admin explicitly set a higher crash target
+        const SAFETY_CAP = 15.0;
+        const crashTarget = this.currentRound.crashMultiplier;
+        const isAdminOverride = crashTarget > SAFETY_CAP; // admin set it high intentionally
+
         // Check crash FIRST — stop before emitting a value above crash target
-        if (this.currentMultiplier >= this.currentRound.crashMultiplier) {
+        const hitCrash = this.currentMultiplier >= crashTarget;
+        const hitSafetyCap = !isAdminOverride && this.currentMultiplier >= SAFETY_CAP;
+
+        if (hitCrash || hitSafetyCap) {
           clearInterval(this.gameInterval);
           this.gameInterval = null;
           this.isRunning = false;
+          if (hitSafetyCap && crashTarget > SAFETY_CAP) {
+            this.currentRound.crashMultiplier = Number(this.currentMultiplier.toFixed(2));
+          }
           this._resolveRunningPhase = null;
           resolve();
           return;
@@ -453,8 +466,13 @@ class GameEngine {
           multiplier: Number(this.currentMultiplier.toFixed(2)),
         });
 
-        // Increment for next tick
-        this.currentMultiplier += this.MULTIPLIER_INCREMENT;
+        // Increment for next tick — speed ramps up at higher multipliers
+        let speedMultiplier = 1;
+        if (this.currentMultiplier >= 60) speedMultiplier = 4;
+        else if (this.currentMultiplier >= 30) speedMultiplier = 3;
+        else if (this.currentMultiplier >= 15) speedMultiplier = 2;
+        else if (this.currentMultiplier >= 10) speedMultiplier = 1.5;
+        this.currentMultiplier += this.MULTIPLIER_INCREMENT * speedMultiplier;
       }, this.TICK_INTERVAL);
     });
 

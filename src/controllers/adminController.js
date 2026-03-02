@@ -837,8 +837,15 @@ const getCrashQueue = async (req, res) => {
 
 const getSpinnerRecords = async (req, res) => {
   try {
-    const { startDate, endDate, date, username, page = 1, limit = 25, all } = req.query;
+    const { startDate, endDate, date, username, page = 1, limit = 25, all, result } = req.query;
     const filter = {};
+
+    // Won / Lost filter
+    if (result === 'won') {
+      filter.outcome = { $ne: 'thank_you' };
+    } else if (result === 'lost') {
+      filter.outcome = 'thank_you';
+    }
 
     if (!all && (startDate || endDate || date)) {
       const sDate = startDate || date;
