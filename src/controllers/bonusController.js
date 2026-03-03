@@ -131,9 +131,9 @@ const claimBonus = async (req, res) => {
       return res.status(400).json({ message: 'No bonus available to claim.' });
     }
 
-    // Credit to wallet
+    // Credit to wallet (earnings)
     const balBefore = user.walletBalance;
-    user.walletBalance += claimableAmount;
+    user.creditEarnings(claimableAmount);
     user.bonusClaimed = (user.bonusClaimed || 0) + claimableAmount;
     user.lastBonusClaimedAt = new Date();
     await user.save();

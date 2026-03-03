@@ -89,7 +89,8 @@ const playSpinner = async (req, res) => {
 
     // Pehle spin cost deduct, phir win amount add
     const balBefore = user.walletBalance;
-    user.walletBalance = user.walletBalance - spinCost + winAmount;
+    user.smartDeduct(spinCost);
+    if (winAmount > 0) user.creditEarnings(winAmount);
     await user.save();
 
     await SpinnerRecord.create({

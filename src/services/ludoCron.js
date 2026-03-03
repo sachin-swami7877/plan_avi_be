@@ -16,7 +16,7 @@ async function expireWaitingMatches(io) {
     const creator = await User.findById(match.creatorId);
     if (creator) {
       const balBef = creator.walletBalance;
-      creator.walletBalance += match.entryAmount;
+      creator.creditEarnings(match.entryAmount);
       await creator.save();
       await recordWalletTx(
         creator._id, 'credit', 'ludo_refund', match.entryAmount,
@@ -66,7 +66,7 @@ async function expireRoomCodeMatches(io) {
       const u = await User.findById(player.userId);
       if (u) {
         const balBef = u.walletBalance;
-        u.walletBalance += player.amountPaid;
+        u.creditEarnings(player.amountPaid);
         await u.save();
         await recordWalletTx(
           u._id, 'credit', 'ludo_refund', player.amountPaid,

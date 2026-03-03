@@ -31,6 +31,14 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  depositBalance: {
+    type: Number,
+    default: 0
+  },
+  earningsBalance: {
+    type: Number,
+    default: 0
+  },
   totalDeposited: {
     type: Number,
     default: 0
@@ -95,6 +103,35 @@ userSchema.pre('save', function (next) {
   }
   next();
 });
+
+// Balance helper methods — deposit first for bets, earnings first for withdrawals
+userSchema.methods.smartDeduct = function (amount) {
+  if (this.walletBalance < amount) throw new Error('Insufficient balance');
+  const fromDeposit = Math.min(this.depositBalance, amount);
+  const fromEarnings = amount - fromDeposit;
+  this.depositBalance -= fromDeposit;
+  this.earningsBalance -= fromEarnings;
+  this.walletBalance -= amount;
+};
+
+userSchema.methods.smartDeductWithdrawal = function (amount) {
+  if (this.walletBalance < amount) throw new Error('Insufficient balance');
+  const fromEarnings = Math.min(this.earningsBalance, amount);
+  const fromDeposit = amount - fromEarnings;
+  this.earningsBalance -= fromEarnings;
+  this.depositBalance -= fromDeposit;
+  this.walletBalance -= amount;
+};
+
+userSchema.methods.creditDeposit = function (amount) {
+  this.depositBalance += amount;
+  this.walletBalance += amount;
+};
+
+userSchema.methods.creditEarnings = function (amount) {
+  this.earningsBalance += amount;
+  this.walletBalance += amount;
+};
 
 // Partial unique indexes — only index non-null values, so multiple null emails/phones are allowed
 userSchema.index({ email: 1 }, { unique: true, partialFilterExpression: { email: { $type: 'string' } } });

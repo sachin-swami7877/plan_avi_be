@@ -125,7 +125,7 @@ const approveLudoResultRequest = async (req, res) => {
     const winner = await User.findById(winnerId);
     if (!winner) return res.status(404).json({ message: 'Winner user not found' });
     const balBeforeWin = winner.walletBalance;
-    winner.walletBalance += winnerAmount;
+    winner.creditEarnings(winnerAmount);
     await winner.save();
 
     await recordWalletTx(
@@ -260,7 +260,7 @@ const updateLudoMatchStatus = async (req, res) => {
         const u = await User.findById(p.userId);
         if (u) {
           const balBef = u.walletBalance;
-          u.walletBalance += p.amountPaid;
+          u.creditEarnings(p.amountPaid);
           await u.save();
           await recordWalletTx(
             p.userId, 'credit', 'ludo_refund', p.amountPaid,
@@ -284,7 +284,7 @@ const updateLudoMatchStatus = async (req, res) => {
       const winner = await User.findById(winnerId);
       if (!winner) return res.status(404).json({ message: 'Winner user not found' });
       const balBef2 = winner.walletBalance;
-      winner.walletBalance += winnerAmount;
+      winner.creditEarnings(winnerAmount);
       await winner.save();
       await recordWalletTx(
         winnerId, 'credit', 'ludo_win', winnerAmount,

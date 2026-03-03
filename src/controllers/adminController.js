@@ -134,7 +134,7 @@ const getDashboardStats = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { period, search, from: fromStr, to: toStr } = req.query;
+    const { period, search, from: fromStr, to: toStr, status, page = 1, limit = 50 } = req.query;
     let filter = {};
     if (fromStr && toStr) {
       const fromDate = new Date(fromStr);
@@ -149,6 +149,13 @@ const getUsers = async (req, res) => {
       else if (period === '30days') from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       if (from) filter.createdAt = { $gte: from };
     }
+    if (status && ['active', 'inactive', 'blocked'].includes(status)) {
+      filter.status = status;
+    }
+    const { role } = req.query;
+    if (role && ['user', 'admin', 'manager'].includes(role)) {
+      filter.role = role;
+    }
     if (search && search.trim()) {
       const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
@@ -158,8 +165,15 @@ const getUsers = async (req, res) => {
         { phone: regex },
       ];
     }
-    const users = await User.find(filter).select('-otp -otpExpiry').sort({ createdAt: -1 });
-    res.json(users);
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [users, totalCount] = await Promise.all([
+      User.find(filter).select('-otp -otpExpiry').sort({ createdAt: -1 }).skip(skip).limit(limitNum),
+      User.countDocuments(filter),
+    ]);
+    res.json({ users, totalCount, page: pageNum, totalPages: Math.ceil(totalCount / limitNum) });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -187,11 +201,14 @@ const createUser = async (req, res) => {
     const validRoles = ['user', 'admin', 'manager'];
     const userRole = validRoles.includes(role) ? role : 'user';
 
+    const initBalance = walletBalance || 0;
     const user = await User.create({
       email: email ? email.toLowerCase() : null,
       name,
       phone: phone || null,
-      walletBalance: walletBalance || 0,
+      walletBalance: initBalance,
+      depositBalance: initBalance,
+      earningsBalance: 0,
       role: userRole,
     });
 
@@ -232,33 +249,37 @@ const updateUserBalance = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     const balBefore = user.walletBalance;
-    let newBalance;
-    if (operation === 'add') newBalance = user.walletBalance + Number(amount);
-    else if (operation === 'subtract') newBalance = Math.max(0, user.walletBalance - Number(amount));
-    else newBalance = Number(amount);
 
-    // Use findByIdAndUpdate to avoid full-document validation
-    // Admin credit counts as deposit (non-withdrawable) for earnings tracking
-    const updateOps = { walletBalance: newBalance };
     if (operation === 'add') {
-      updateOps.$inc = { totalDeposited: Number(amount) };
+      user.creditDeposit(Number(amount));
+      user.totalDeposited = (user.totalDeposited || 0) + Number(amount);
+    } else if (operation === 'subtract') {
+      const subtractAmt = Math.min(Number(amount), user.walletBalance);
+      if (subtractAmt > 0) user.smartDeduct(subtractAmt);
+    } else {
+      // 'set' operation — reset to new value, all as earnings
+      const newVal = Number(amount);
+      user.walletBalance = newVal;
+      user.depositBalance = 0;
+      user.earningsBalance = newVal;
     }
-    const updated = updateOps.$inc
-      ? await User.findByIdAndUpdate(id, { walletBalance: newBalance, $inc: { totalDeposited: Number(amount) } }, { new: true, runValidators: false })
-      : await User.findByIdAndUpdate(id, { walletBalance: newBalance }, { new: true, runValidators: false });
+    await user.save();
 
+    const newBalance = user.walletBalance;
     const txType = newBalance >= balBefore ? 'credit' : 'debit';
     const txAmt = Math.abs(newBalance - balBefore);
-    await recordWalletTx(
-      id, txType, txType === 'credit' ? 'admin_credit' : 'admin_debit', txAmt,
-      `Admin ${operation === 'add' ? 'added' : operation === 'subtract' ? 'subtracted' : 'set'} ₹${amount}`,
-      balBefore, newBalance
-    );
+    if (txAmt > 0) {
+      await recordWalletTx(
+        id, txType, txType === 'credit' ? 'admin_credit' : 'admin_debit', txAmt,
+        `Admin ${operation === 'add' ? 'added' : operation === 'subtract' ? 'subtracted' : 'set'} ₹${amount}`,
+        balBefore, newBalance
+      );
+    }
 
     const io = req.app.get('io');
     if (io) io.to(`user_${id}`).emit('wallet:balance-updated', { walletBalance: newBalance });
 
-    res.json({ message: 'Balance updated successfully', user: { _id: updated._id, name: updated.name, walletBalance: updated.walletBalance } });
+    res.json({ message: 'Balance updated successfully', user: { _id: user._id, name: user.name, walletBalance: user.walletBalance } });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -284,13 +305,13 @@ const updateUserEarnings = async (req, res) => {
       return res.status(400).json({ message: `Earnings cannot exceed wallet balance (₹${user.walletBalance.toFixed(2)})` });
     }
 
-    const newTotalDeposited = Math.max(0, user.walletBalance - desiredEarnings);
-    const oldEarnings = Math.max(0, user.walletBalance - (user.totalDeposited || 0));
+    const oldEarnings = user.earningsBalance || 0;
+    user.earningsBalance = desiredEarnings;
+    user.depositBalance = Math.max(0, user.walletBalance - desiredEarnings);
+    user.totalDeposited = user.depositBalance;
+    await user.save();
 
-    await User.findByIdAndUpdate(id, { totalDeposited: newTotalDeposited }, { runValidators: false });
-
-    
-    console.log(`📝 EARNINGS EDIT — User: ${user.name} (${id}), Earnings: ₹${oldEarnings.toFixed(2)} → ₹${desiredEarnings.toFixed(2)}, totalDeposited: ${user.totalDeposited || 0} → ${newTotalDeposited}`);
+    console.log(`EARNINGS EDIT — User: ${user.name} (${id}), Earnings: ${oldEarnings.toFixed(2)} -> ${desiredEarnings.toFixed(2)}, depositBalance: ${user.depositBalance}`);
 
     res.json({
       message: 'Earnings updated successfully',
@@ -298,7 +319,9 @@ const updateUserEarnings = async (req, res) => {
         _id: user._id,
         name: user.name,
         walletBalance: user.walletBalance,
-        totalDeposited: newTotalDeposited,
+        depositBalance: user.depositBalance,
+        earningsBalance: user.earningsBalance,
+        totalDeposited: user.totalDeposited,
         earnings: desiredEarnings,
       },
     });
@@ -418,35 +441,27 @@ const processWalletRequest = async (req, res) => {
     }
 
     const user = await User.findById(walletRequest.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
     const balBefore = user.walletBalance;
-    let newBalance = user.walletBalance;
 
     if (action === 'approve') {
       if (walletRequest.type === 'deposit') {
-        newBalance = user.walletBalance + walletRequest.amount;
+        user.creditDeposit(walletRequest.amount);
+        user.totalDeposited = (user.totalDeposited || 0) + walletRequest.amount;
       }
       walletRequest.status = 'approved';
     } else if (action === 'reject') {
       if (walletRequest.type === 'withdrawal') {
-        newBalance = user.walletBalance + walletRequest.amount;
+        user.creditEarnings(walletRequest.amount);
       }
       walletRequest.status = 'rejected';
     } else {
       return res.status(400).json({ message: 'Invalid action' });
     }
 
-    // Use findByIdAndUpdate to avoid full-document validation failures on users with null email/phone
-    const updateFields = { walletBalance: newBalance };
-    // Track deposit amount for earnings calculation (withdrawal limited to earnings only)
-    if (action === 'approve' && walletRequest.type === 'deposit') {
-      updateFields.$inc = { totalDeposited: walletRequest.amount };
-    }
-    if (updateFields.$inc) {
-      await User.findByIdAndUpdate(user._id, { walletBalance: newBalance, $inc: { totalDeposited: walletRequest.amount } }, { runValidators: false });
-    } else {
-      await User.findByIdAndUpdate(user._id, { walletBalance: newBalance }, { runValidators: false });
-    }
+    await user.save();
+    const newBalance = user.walletBalance;
 
     // Record transaction if balance changed
     if (newBalance !== balBefore) {
@@ -926,7 +941,6 @@ const getSettings = async (req, res) => {
       dummyUserCount: settings.dummyUserCount || 10,
       layout: settings.layout || false,
       userWarning: settings.userWarning || '',
-      ludoGameDurationMinutes: settings.ludoGameDurationMinutes ?? 30,
       ludoDummyRunningBattles: settings.ludoDummyRunningBattles ?? 15,
       ludoEnabled: settings.ludoEnabled ?? true,
       ludoDisableReason: settings.ludoDisableReason || '',
@@ -955,7 +969,6 @@ const updateSettings = async (req, res) => {
       termsDeposit, termsWithdrawal, termsGeneral,
       dummyUserCount,
       layout,
-      ludoGameDurationMinutes,
       ludoDummyRunningBattles,
       userWarning,
       ludoCommTier1Max, ludoCommTier1Pct,
@@ -987,10 +1000,6 @@ const updateSettings = async (req, res) => {
     if (termsGeneral !== undefined) settings.termsGeneral = termsGeneral;
     if (dummyUserCount !== undefined) settings.dummyUserCount = Number(dummyUserCount);
     if (layout !== undefined) settings.layout = Boolean(layout);
-    if (ludoGameDurationMinutes !== undefined) {
-      const n = Number(ludoGameDurationMinutes);
-      if (n >= 5 && n <= 120) settings.ludoGameDurationMinutes = n;
-    }
     if (ludoDummyRunningBattles !== undefined) {
       const n = Number(ludoDummyRunningBattles);
       if (n >= 0 && n <= 50) settings.ludoDummyRunningBattles = n;

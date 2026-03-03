@@ -27,8 +27,6 @@ const adminSettingsSchema = new mongoose.Schema({
   layout: { type: Boolean, default: false },
   // User Warning (shown on dashboard)
   userWarning: { type: String, default: '' },
-  // Ludo: game duration in minutes (from game start to expiry)
-  ludoGameDurationMinutes: { type: Number, default: 30, min: 5, max: 120 },
   // Ludo: number of dummy running battles to show on user app (frontend generates them)
   ludoDummyRunningBattles: { type: Number, default: 15, min: 0, max: 50 },
   // Bets toggle (persisted so it survives server restarts)

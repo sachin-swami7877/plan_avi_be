@@ -48,7 +48,7 @@ const createMatch = async (req, res) => {
     });
 
     const balBeforeCreate = user.walletBalance;
-    user.walletBalance -= amount;
+    user.smartDeduct(amount);
     await user.save();
 
     await recordWalletTx(
@@ -173,7 +173,7 @@ const joinMatch = async (req, res) => {
     }
 
     const balBeforeJoin = user.walletBalance;
-    user.walletBalance -= match.entryAmount;
+    user.smartDeduct(match.entryAmount);
     await user.save();
 
     await recordWalletTx(
@@ -245,7 +245,7 @@ const cancelMatch = async (req, res) => {
 
       const user = await User.findById(req.user._id);
       const balBeforeCancel = user.walletBalance;
-      user.walletBalance += match.entryAmount;
+      user.creditEarnings(match.entryAmount);
       await user.save();
 
       await recordWalletTx(
@@ -285,7 +285,7 @@ const cancelMatch = async (req, res) => {
         const pUser = await User.findById(player.userId);
         if (pUser) {
           const balBef = pUser.walletBalance;
-          pUser.walletBalance += player.amountPaid;
+          pUser.creditEarnings(player.amountPaid);
           await pUser.save();
           await recordWalletTx(
             pUser._id, 'credit', 'ludo_refund', player.amountPaid,
@@ -615,13 +615,13 @@ const cancelAsLoss = async (req, res) => {
     if (!otherPlayer) return res.status(400).json({ message: 'Invalid match' });
 
     // Canceller gets nothing — no wallet update
-    canceller.walletBalance += cancellerRefund;
+    if (cancellerRefund > 0) canceller.creditEarnings(cancellerRefund);
     await canceller.save();
 
     const otherUser = await User.findById(otherPlayer.userId);
     if (otherUser) {
       const balBeforeOther = otherUser.walletBalance;
-      otherUser.walletBalance += otherRefund;
+      otherUser.creditEarnings(otherRefund);
       await otherUser.save();
       await recordWalletTx(
         otherUser._id, 'credit', 'ludo_refund', otherRefund,
@@ -654,9 +654,8 @@ const cancelAsLoss = async (req, res) => {
 // @route   GET /api/ludo/settings
 const getLudoSettings = async (req, res) => {
   try {
-    const settings = await AdminSettings.findOne({ key: 'main' }).select('ludoGameDurationMinutes ludoDummyRunningBattles ludoCommTier1Max ludoCommTier1Pct ludoCommTier2Max ludoCommTier2Pct ludoCommTier3Pct ludoEnabled ludoDisableReason ludoWarning').lean();
+    const settings = await AdminSettings.findOne({ key: 'main' }).select('ludoDummyRunningBattles ludoCommTier1Max ludoCommTier1Pct ludoCommTier2Max ludoCommTier2Pct ludoCommTier3Pct ludoEnabled ludoDisableReason ludoWarning').lean();
     res.json({
-      ludoGameDurationMinutes: settings?.ludoGameDurationMinutes ?? GAME_DURATION_DEFAULT_MINUTES,
       ludoDummyRunningBattles: settings?.ludoDummyRunningBattles ?? 15,
       ludoCommTier1Max: settings?.ludoCommTier1Max ?? 250,
       ludoCommTier1Pct: settings?.ludoCommTier1Pct ?? 10,
@@ -755,7 +754,7 @@ const checkExpiry = async (req, res) => {
       const u = await User.findById(player.userId);
       if (u) {
         const balBef = u.walletBalance;
-        u.walletBalance += player.amountPaid;
+        u.creditEarnings(player.amountPaid);
         await u.save();
         await recordWalletTx(
           u._id, 'credit', 'ludo_refund', player.amountPaid,

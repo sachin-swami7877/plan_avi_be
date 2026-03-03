@@ -1,11 +1,20 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const initSocket = (io) => {
+  // Track active authenticated users: userId -> Set of socketIds
+  const activeUsers = new Map();
+  io._activeUsers = activeUsers;
+
+  const broadcastActiveCount = () => {
+    io.emit('app:active-users', { count: activeUsers.size });
+    io.to('admins').emit('app:active-user-ids', { ids: Array.from(activeUsers.keys()) });
+  };
+
   // Authentication middleware for socket
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token;
-      
+
       if (!token) {
         // Allow connection without auth for game state viewing
         socket.user = null;
@@ -14,7 +23,7 @@ const initSocket = (io) => {
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const user = await User.findById(decoded.id).select('-otp -otpExpiry');
-      
+
       if (!user) {
         return next(new Error('User not found'));
       }
@@ -35,6 +44,14 @@ const initSocket = (io) => {
     if (socket.user) {
       socket.join(`user_${socket.user._id}`);
       console.log(`👤 User ${socket.user.name} joined room user_${socket.user._id}`);
+
+      // Track active user
+      const userId = socket.user._id.toString();
+      if (!activeUsers.has(userId)) {
+        activeUsers.set(userId, new Set());
+      }
+      activeUsers.get(userId).add(socket.id);
+      broadcastActiveCount();
 
       // Join admin room if admin or subAdmin
       if (socket.user.isAdmin || socket.user.isSubAdmin) {
@@ -73,6 +90,18 @@ const initSocket = (io) => {
     // Handle disconnect
     socket.on('disconnect', () => {
       console.log(`🔌 Socket disconnected: ${socket.id}`);
+
+      if (socket.user) {
+        const userId = socket.user._id.toString();
+        const sockets = activeUsers.get(userId);
+        if (sockets) {
+          sockets.delete(socket.id);
+          if (sockets.size === 0) {
+            activeUsers.delete(userId);
+          }
+        }
+        broadcastActiveCount();
+      }
     });
   });
 

@@ -102,7 +102,7 @@ class GameEngine {
           try {
             const user = await User.findById(bet.userId);
             if (user) {
-              user.walletBalance += bet.amount;
+              user.creditEarnings(bet.amount);
               await user.save();
               await recordWalletTx(user._id, bet.amount, 'credit', 'bet_refund', `Refund for orphaned bet (server restart)`);
             }
@@ -601,7 +601,7 @@ class GameEngine {
 
     // Deduct balance & track cumulative bets
     const balBefore = user.walletBalance;
-    user.walletBalance -= amount;
+    user.smartDeduct(amount);
     user.totalBetAmount = (user.totalBetAmount || 0) + amount;
     await user.save();
 
@@ -655,7 +655,7 @@ class GameEngine {
     // Add winnings to user
     const user = await User.findById(userId);
     const balBefore = user.walletBalance;
-    user.walletBalance += profit;
+    user.creditEarnings(profit);
     await user.save();
 
     await recordWalletTx(

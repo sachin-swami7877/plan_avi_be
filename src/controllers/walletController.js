@@ -33,7 +33,11 @@ const getPaymentInfo = async (req, res) => {
 const getBalance = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    res.json({ balance: user.walletBalance });
+    res.json({
+      balance: user.walletBalance,
+      depositBalance: user.depositBalance || 0,
+      earningsBalance: user.earningsBalance || 0,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -142,8 +146,8 @@ const createWithdrawalRequest = async (req, res) => {
 
     const user = await User.findById(req.user._id);
 
-    // Users can only withdraw earnings (balance minus total deposited)
-    const earnings = Math.max(0, user.walletBalance - (user.totalDeposited || 0));
+    // Users can only withdraw earnings
+    const earnings = user.earningsBalance || 0;
     if (amount > earnings) {
       return res.status(400).json({ message: `You can only withdraw your earnings. Withdrawable: ₹${earnings.toFixed(2)}` });
     }
@@ -163,9 +167,9 @@ const createWithdrawalRequest = async (req, res) => {
       return res.status(400).json({ message: 'You can only request 2 withdrawals per day.' });
     }
 
-    // Deduct balance immediately
+    // Deduct balance immediately (earnings first for withdrawals)
     const balBefore = user.walletBalance;
-    user.walletBalance -= amount;
+    user.smartDeductWithdrawal(amount);
     await user.save();
 
     const walletRequest = await WalletRequest.create({
@@ -214,9 +218,9 @@ const createWithdrawalRequest = async (req, res) => {
 // @route   GET /api/wallet/withdrawal-info
 const getWithdrawalInfo = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('walletBalance totalDeposited');
+    const user = await User.findById(req.user._id).select('walletBalance depositBalance earningsBalance totalDeposited');
     const totalDeposited = user.totalDeposited || 0;
-    const earnings = Math.max(0, user.walletBalance - totalDeposited);
+    const earnings = user.earningsBalance || 0;
 
     // Check if withdrawals are enabled
     const AdminSettings = require('../models/AdminSettings');
@@ -224,7 +228,15 @@ const getWithdrawalInfo = async (req, res) => {
     const withdrawalsEnabled = adminSettings?.withdrawalsEnabled ?? true;
     const withdrawalDisableReason = adminSettings?.withdrawalDisableReason || '';
 
-    res.json({ walletBalance: user.walletBalance, totalDeposited, earnings, withdrawalsEnabled, withdrawalDisableReason });
+    res.json({
+      walletBalance: user.walletBalance,
+      depositBalance: user.depositBalance || 0,
+      earningsBalance: user.earningsBalance || 0,
+      totalDeposited,
+      earnings,
+      withdrawalsEnabled,
+      withdrawalDisableReason,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

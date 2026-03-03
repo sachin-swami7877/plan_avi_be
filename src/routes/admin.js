@@ -51,6 +51,12 @@ router.use(protect);
 router.use(adminOnly);
 
 router.get('/dashboard', getDashboardStats);
+router.get('/active-users', (req, res) => {
+  const io = req.app.get('io');
+  const activeUsers = io?._activeUsers;
+  const ids = activeUsers ? Array.from(activeUsers.keys()) : [];
+  res.json({ ids, count: ids.length });
+});
 router.get('/users', getUsers);
 router.post('/users', fullAdminOnly, createUser);
 router.put('/users/:id', fullAdminOnly, updateUser);
