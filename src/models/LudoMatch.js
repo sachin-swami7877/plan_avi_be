@@ -24,7 +24,7 @@ const ludoMatchSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['waiting', 'live', 'completed', 'cancelled'],
+    enum: ['waiting', 'live', 'cancel_requested', 'completed', 'cancelled'],
     default: 'waiting',
   },
   // Max 2 players per game: creator + 1 joiner
@@ -58,6 +58,24 @@ const ludoMatchSchema = new mongoose.Schema({
     default: null,
   },
   cancelReason: {
+    type: String,
+    default: null,
+  },
+  // Cancel dispute fields — set when a player clicks "Cancel" after game has started
+  cancelRequestedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
+  cancelRequestedAt: {
+    type: Date,
+    default: null,
+  },
+  cancelReasonCode: {
+    type: String,
+    default: null,
+  },
+  cancelReasonCustom: {
     type: String,
     default: null,
   },

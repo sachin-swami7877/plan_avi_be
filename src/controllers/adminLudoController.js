@@ -20,7 +20,7 @@ const getAllLudoMatches = async (req, res) => {
     const pendingMatchIds = await LudoResultRequest.find({ status: 'pending' }).distinct('matchId');
 
     if (isRequestedFilter) {
-      query.status = 'live';
+      query.status = { $in: ['live', 'cancel_requested'] };
       if (pendingMatchIds.length > 0) {
         query._id = { $in: pendingMatchIds };
       } else {
@@ -75,7 +75,10 @@ const getLudoMatchDetail = async (req, res) => {
       timeRemaining = ms > 0 ? Math.ceil(ms / 60000) : 0;
     }
 
-    res.json({ ...match, timeRemainingMinutes: timeRemaining });
+    // Also fetch the result request for this match (if any)
+    const resultRequest = await LudoResultRequest.findOne({ matchId: match._id }).lean();
+
+    res.json({ ...match, timeRemainingMinutes: timeRemaining, resultRequest: resultRequest || null });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -88,7 +91,7 @@ const getLudoResultRequests = async (req, res) => {
   try {
     const { status = 'pending' } = req.query;
     const requests = await LudoResultRequest.find({ status })
-      .populate('matchId', 'roomCode entryAmount status players gameStartedAt gameExpiryAt creatorName')
+      .populate('matchId', 'roomCode entryAmount status players gameStartedAt gameExpiryAt creatorName cancelRequestedBy cancelReasonCode cancelReasonCustom')
       .sort({ updatedAt: -1 })
       .limit(50)
       .lean();
@@ -115,8 +118,8 @@ const approveLudoResultRequest = async (req, res) => {
 
     const match = await LudoMatch.findById(request.matchId);
     if (!match) return res.status(404).json({ message: 'Match not found' });
-    if (match.status !== 'live') {
-      return res.status(400).json({ message: 'Match is not live' });
+    if (!['live', 'cancel_requested'].includes(match.status)) {
+      return res.status(400).json({ message: 'Match is not in a valid state for approval' });
     }
 
     const pool = match.players.reduce((s, p) => s + p.amountPaid, 0);
@@ -255,27 +258,40 @@ const updateLudoMatchStatus = async (req, res) => {
       match.status = 'cancelled';
       match.cancelledAt = new Date();
       match.cancelReason = cancelReason || 'Admin cancelled';
-      // Refund all players
+      const shouldRefund = req.body.refund !== false; // default true unless explicitly false
+      const Notification = require('../models/Notification');
+      const io = req.app.get('io');
       for (const p of match.players) {
         const u = await User.findById(p.userId);
         if (u) {
-          const balBef = u.walletBalance;
-          u.creditEarnings(p.amountPaid);
-          await u.save();
-          await recordWalletTx(
-            p.userId, 'credit', 'ludo_refund', p.amountPaid,
-            `Ludo match admin-cancelled — ₹${p.amountPaid} refunded`,
-            balBef, u.walletBalance, match._id
-          );
+          if (shouldRefund) {
+            const balBef = u.walletBalance;
+            u.creditEarnings(p.amountPaid);
+            await u.save();
+            await recordWalletTx(
+              p.userId, 'credit', 'ludo_refund', p.amountPaid,
+              `Ludo match admin-cancelled — ₹${p.amountPaid} refunded`,
+              balBef, u.walletBalance, match._id
+            );
+            if (io) io.to(`user_${p.userId}`).emit('wallet:balance-updated', { walletBalance: u.walletBalance });
+          }
+          const notif = await Notification.create({
+            userId: p.userId,
+            title: 'Match Admin Cancelled',
+            message: shouldRefund
+              ? `Admin ने match cancel कर दिया। ₹${p.amountPaid} आपके wallet में वापस कर दिया गया।`
+              : `Admin ने match cancel कर दिया। कोई refund नहीं मिलेगा।`,
+            type: 'game',
+          });
+          if (io) io.to(`user_${p.userId}`).emit('notification:new', notif);
         }
       }
       await match.save();
-      const io = req.app.get('io');
       if (io) {
         io.emit('ludo:waiting-updated');
         io.emit('ludo:match-live');
       }
-      return res.json({ message: 'Match cancelled. All players refunded.', match });
+      return res.json({ message: shouldRefund ? 'Match cancelled. All players refunded.' : 'Match cancelled. No refund given.', match });
     }
 
     if (status === 'completed' && winnerId) {
@@ -329,12 +345,188 @@ const bulkDeleteLudoMatches = async (req, res) => {
   }
 };
 
+// @desc    Resolve cancel dispute or cancel_accepted — admin sets refund or declares winner
+// @route   PUT /api/admin/ludo/result-requests/:id/resolve-dispute
+const resolveDispute = async (req, res) => {
+  try {
+    const request = await LudoResultRequest.findById(req.params.id);
+    if (!request) return res.status(404).json({ message: 'Request not found' });
+    if (request.status !== 'pending') {
+      return res.status(400).json({ message: 'Request already processed' });
+    }
+    if (!['cancel_dispute', 'cancel_accepted'].includes(request.disputeType)) {
+      return res.status(400).json({ message: 'This is not a cancel dispute/accepted request' });
+    }
+
+    const { refundDecisions, adminNote, winnerId } = req.body;
+
+    const match = await LudoMatch.findById(request.matchId);
+    if (!match) return res.status(404).json({ message: 'Match not found' });
+
+    const Notification = require('../models/Notification');
+    const io = req.app.get('io');
+    const savedDecisions = [];
+
+    if (winnerId) {
+      // Winner declared — give full prize via commission calculation
+      const winnerPlayer = match.players.find((p) => p.userId.toString() === winnerId.toString());
+      if (!winnerPlayer) return res.status(400).json({ message: 'Winner not found in match players' });
+
+      const pool = match.players.reduce((s, p) => s + p.amountPaid, 0);
+      const { commission, winnerAmount } = await calcLudoCommission(pool, match.entryAmount);
+
+      const winner = await User.findById(winnerId);
+      if (winner) {
+        const balBef = winner.walletBalance;
+        winner.creditEarnings(winnerAmount);
+        await winner.save();
+        await recordWalletTx(
+          winner._id, 'credit', 'ludo_win', winnerAmount,
+          `Ludo cancel dispute resolved — ₹${winnerAmount} prize`,
+          balBef, winner.walletBalance, match._id
+        );
+        if (io) io.to(`user_${winner._id}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance });
+        const winNotif = await Notification.create({
+          userId: winner._id,
+          title: 'आप जीत गए!',
+          message: `Admin ने cancel dispute resolve कर दिया। आपको ₹${winnerAmount} prize मिला!`,
+          type: 'game',
+        });
+        if (io) io.to(`user_${winner._id}`).emit('notification:new', winNotif);
+        savedDecisions.push({ userId: winner._id, userName: winner.name || winnerPlayer.userName, refundType: 'full', amount: winnerAmount });
+      }
+
+      // Loser (other player) gets 0
+      for (const player of match.players) {
+        if (player.userId.toString() !== winnerId.toString()) {
+          const loserNotif = await Notification.create({
+            userId: player.userId,
+            title: 'Dispute Resolved',
+            message: `Admin ने cancel dispute resolve कर दिया। ${winnerPlayer.userName} को winner declare किया गया। कोई refund नहीं मिलेगा।`,
+            type: 'game',
+          });
+          if (io) io.to(`user_${player.userId}`).emit('notification:new', loserNotif);
+          savedDecisions.push({ userId: player.userId, userName: player.userName, refundType: 'zero', amount: 0 });
+        }
+      }
+
+      match.status = 'completed';
+      match.winnerId = winnerId;
+
+    } else {
+      // Refund mode — process refund decisions for each player
+      if (!Array.isArray(refundDecisions) || refundDecisions.length === 0) {
+        return res.status(400).json({ message: 'refundDecisions array is required when no winner' });
+      }
+
+      // Calculate the total prize pool for refund_win_percent option
+      const pool = match.players.reduce((s, p) => s + (p.amountPaid || 0), 0);
+      const { winnerAmount: prizePool } = await calcLudoCommission(pool, match.entryAmount);
+
+      for (const decision of refundDecisions) {
+        const player = match.players.find((p) => p.userId.toString() === decision.userId.toString());
+        if (!player) continue;
+
+        let refundAmount = 0;
+        if (decision.refundType === 'full') {
+          refundAmount = player.amountPaid;
+        } else if (decision.refundType === 'percent30') {
+          refundAmount = Math.round(player.amountPaid * 0.3);
+        } else if (decision.refundType === 'zero') {
+          refundAmount = 0;
+        } else if (decision.refundType === 'custom') {
+          refundAmount = Math.max(0, Number(decision.customAmount) || 0);
+        } else if (decision.refundType === 'custom_percent') {
+          // Custom % of entry amount
+          const pct = Math.max(0, Math.min(100, Number(decision.customPercent) || 0));
+          refundAmount = Math.round((player.amountPaid || 0) * pct / 100);
+        } else if (decision.refundType === 'refund_win_percent') {
+          // Entry refund + (X% of one side's entry, after commission deducted proportionally)
+          // = amountPaid + round(amountPaid * winPct/100 * prizePool/pool)
+          const winPct = Math.max(0, Math.min(100, Number(decision.winPercent) || 0));
+          const winPortion = pool > 0 ? Math.round((player.amountPaid || 0) * winPct / 100 * prizePool / pool) : 0;
+          refundAmount = (player.amountPaid || 0) + winPortion;
+        }
+
+        savedDecisions.push({
+          userId: player.userId,
+          userName: player.userName,
+          refundType: decision.refundType,
+          winPercent: decision.refundType === 'refund_win_percent' ? (Number(decision.winPercent) || 0) : null,
+          customPercent: decision.refundType === 'custom_percent' ? (Number(decision.customPercent) || 0) : null,
+          amount: refundAmount,
+        });
+
+        if (refundAmount > 0) {
+          const pUser = await User.findById(player.userId);
+          if (pUser) {
+            const balBef = pUser.walletBalance;
+            pUser.creditEarnings(refundAmount);
+            await pUser.save();
+            await recordWalletTx(
+              pUser._id, 'credit', 'ludo_refund', refundAmount,
+              `Ludo cancel dispute resolved — ₹${refundAmount} refunded`,
+              balBef, pUser.walletBalance, match._id
+            );
+            if (io) io.to(`user_${player.userId}`).emit('wallet:balance-updated', { walletBalance: pUser.walletBalance });
+          }
+        }
+
+        const refundMsg = decision.refundType === 'refund_win_percent' && refundAmount > 0
+          ? `₹${player.amountPaid || 0} entry refund + ₹${refundAmount - (player.amountPaid || 0)} winning amount (${decision.winPercent || 0}%) — कुल ₹${refundAmount} wallet में मिला।`
+          : decision.refundType === 'custom_percent' && refundAmount > 0
+          ? `₹${refundAmount} refund (${decision.customPercent || 0}% of entry) आपके wallet में मिला।`
+          : refundAmount > 0
+            ? `₹${refundAmount} आपके wallet में वापस कर दिया गया।`
+            : 'आपको कोई refund नहीं मिलेगा।';
+
+        const notif = await Notification.create({
+          userId: player.userId,
+          title: 'Dispute Resolved',
+          message: `Admin ने dispute resolve कर दिया। ${refundMsg}`,
+          type: 'game',
+        });
+        if (io) io.to(`user_${player.userId}`).emit('notification:new', notif);
+      }
+
+      match.status = 'cancelled';
+      match.cancelledAt = new Date();
+      match.cancelReason = 'Cancel dispute resolved by admin';
+    }
+
+    await match.save();
+
+    request.status = 'resolved';
+    request.refundDecisions = savedDecisions;
+    request.winnerId = winnerId || null;
+    request.reviewedBy = req.user._id;
+    request.reviewedAt = new Date();
+    request.adminNote = adminNote || null;
+    await request.save();
+
+    // Emit match-resolved to all players for real-time UI refresh
+    if (io) {
+      for (const player of match.players) {
+        io.to(`user_${player.userId}`).emit('ludo:match-resolved', { matchId: match._id.toString() });
+      }
+      io.emit('ludo:match-live');
+      io.emit('ludo:waiting-updated');
+    }
+
+    res.json({ message: 'Dispute resolved. Players notified.', savedDecisions });
+  } catch (error) {
+    console.error('resolveDispute error:', error?.message, error?.stack || error);
+    res.status(500).json({ message: error.message || 'Server error', detail: error?.stack?.split('\n')[0] });
+  }
+};
+
 module.exports = {
   getAllLudoMatches,
   getLudoMatchDetail,
   getLudoResultRequests,
   approveLudoResultRequest,
   rejectLudoResultRequest,
+  resolveDispute,
   updateLudoMatchStatus,
   bulkDeleteLudoMatches,
 };

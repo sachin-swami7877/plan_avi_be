@@ -40,6 +40,7 @@ const {
   getLudoResultRequests,
   approveLudoResultRequest,
   rejectLudoResultRequest,
+  resolveDispute,
   updateLudoMatchStatus,
   bulkDeleteLudoMatches,
 } = require('../controllers/adminLudoController');
@@ -97,5 +98,6 @@ router.put('/ludo/matches/:id/status', updateLudoMatchStatus);
 router.get('/ludo/result-requests', getLudoResultRequests);
 router.put('/ludo/result-requests/:id/approve', approveLudoResultRequest);
 router.put('/ludo/result-requests/:id/reject', rejectLudoResultRequest);
+router.put('/ludo/result-requests/:id/resolve-dispute', resolveDispute);
 
 module.exports = router;

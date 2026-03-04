@@ -5,6 +5,9 @@ const {
   submitRoomCode,
   joinMatch,
   cancelMatch,
+  requestCancel,
+  acceptCancel,
+  submitWinDispute,
   checkMatchWaiting,
   checkExpiry,
   getMyMatches,
@@ -25,6 +28,9 @@ router.post('/create', createMatch);
 router.post('/submit-room-code', submitRoomCode);
 router.post('/join', joinMatch);
 router.post('/cancel', cancelMatch);
+router.post('/request-cancel', requestCancel);
+router.post('/accept-cancel', acceptCancel);
+router.post('/submit-win-dispute', upload.single('screenshot'), submitWinDispute);
 router.post('/check-expiry', checkExpiry);
 router.get('/match/:id/check', checkMatchWaiting);
 router.get('/settings', getLudoSettings);

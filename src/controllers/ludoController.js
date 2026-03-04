@@ -225,6 +225,263 @@ const joinMatch = async (req, res) => {
   }
 };
 
+// Cancel reason labels (for display)
+const CANCEL_REASON_LABELS = {
+  connection_issue: 'Internet / Connection में Problem',
+  game_not_loaded: 'Game Load नहीं हुआ',
+  wrong_room_code: 'Room Code गलत था',
+  opponent_left: 'Opponent ने Game छोड़ दिया',
+  other: 'अन्य कारण',
+};
+
+// Win dispute reason labels
+const WIN_REASON_LABELS = {
+  i_clearly_won: 'मैंने Clearly Game जीता है',
+  opponent_left_mid_game: 'Opponent ने बीच में Game छोड़ दिया',
+  have_proof: 'मेरे पास Screenshot Proof है',
+  unfair_cancel: 'Cancel Request अनुचित था',
+  other: 'अन्य कारण',
+};
+
+// @desc    Request cancel after game has started — saves reason, notifies opponent
+// @route   POST /api/ludo/request-cancel
+const requestCancel = async (req, res) => {
+  try {
+    const { matchId, reasonCode, customReason } = req.body;
+    if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
+    if (!reasonCode) return res.status(400).json({ message: 'Cancel reason is required' });
+
+    const match = await LudoMatch.findById(matchId);
+    if (!match) return res.status(404).json({ message: 'Match not found' });
+
+    const userId = req.user._id.toString();
+    const isPlayer = match.players.some((p) => p.userId.toString() === userId);
+    if (!isPlayer) return res.status(403).json({ message: 'You are not in this match' });
+
+    if (match.status !== 'live') {
+      return res.status(400).json({ message: 'Cancel request can only be made for live matches' });
+    }
+    if (!match.roomCode || !match.roomCode.trim()) {
+      return res.status(400).json({ message: 'Game has not started yet. Use regular cancel instead.' });
+    }
+
+    // Check no result request already exists
+    const hasRequest = await LudoResultRequest.findOne({ matchId: match._id });
+    if (hasRequest) {
+      return res.status(400).json({ message: 'A result request already exists for this match.' });
+    }
+
+    const reasonLabel = CANCEL_REASON_LABELS[reasonCode] || reasonCode;
+    const displayReason = reasonCode === 'other' ? (customReason || 'अन्य कारण') : reasonLabel;
+
+    match.status = 'cancel_requested';
+    match.cancelRequestedBy = req.user._id;
+    match.cancelRequestedAt = new Date();
+    match.cancelReasonCode = reasonCode;
+    match.cancelReasonCustom = reasonCode === 'other' ? customReason : null;
+    await match.save();
+
+    const io = req.app.get('io');
+    const otherPlayer = match.players.find((p) => p.userId.toString() !== userId);
+
+    if (otherPlayer) {
+      const notif = await Notification.create({
+        userId: otherPlayer.userId,
+        title: 'Cancel Request मिली',
+        message: `${req.user.name} ने game cancel करने की request दी है। कारण: "${displayReason}"`,
+        type: 'game',
+      });
+      if (io) {
+        io.to(`user_${otherPlayer.userId}`).emit('notification:new', notif);
+        io.to(`user_${otherPlayer.userId}`).emit('ludo:cancel-requested', {
+          matchId: match._id.toString(),
+          cancellerName: req.user.name,
+          reasonCode,
+          displayReason,
+        });
+      }
+    }
+
+    // Notify canceller too
+    if (io) {
+      io.to(`user_${userId}`).emit('ludo:cancel-request-sent', { matchId: match._id.toString() });
+    }
+
+    res.json({ message: 'Cancel request submitted. Opponent has been notified.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Accept opponent's cancel request — sends to admin for refund review
+// @route   POST /api/ludo/accept-cancel
+const acceptCancel = async (req, res) => {
+  try {
+    const { matchId } = req.body;
+    if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
+
+    const match = await LudoMatch.findById(matchId);
+    if (!match) return res.status(404).json({ message: 'Match not found' });
+
+    const userId = req.user._id.toString();
+    const isPlayer = match.players.some((p) => p.userId.toString() === userId);
+    if (!isPlayer) return res.status(403).json({ message: 'You are not in this match' });
+
+    if (match.status !== 'cancel_requested') {
+      return res.status(400).json({ message: 'No pending cancel request for this match' });
+    }
+    // Only the OTHER player (not the one who requested) can accept
+    if (match.cancelRequestedBy.toString() === userId) {
+      return res.status(400).json({ message: 'You cannot accept your own cancel request' });
+    }
+
+    // Check no result request already exists
+    const hasRequest = await LudoResultRequest.findOne({ matchId: match._id });
+    if (hasRequest) {
+      return res.status(400).json({ message: 'A result request already exists for this match.' });
+    }
+
+    // Create cancel_accepted result request — admin will decide refunds
+    const request = await LudoResultRequest.create({
+      matchId: match._id,
+      disputeType: 'cancel_accepted',
+      claims: [],
+      status: 'pending',
+    });
+
+    const io = req.app.get('io');
+
+    // Notify admin
+    if (io) {
+      io.to('admins').emit('admin:ludo-result-request', {
+        requestId: request._id,
+        matchId: match._id,
+        userName: req.user.name,
+        disputeType: 'cancel_accepted',
+      });
+    }
+
+    // Notify both players that admin will now decide
+    for (const player of match.players) {
+      const notif = await Notification.create({
+        userId: player.userId,
+        title: 'Cancel Accept — Admin Review',
+        message: `Cancel accept हो गया। Admin refund तय करेगा और जल्द ही पैसा वापस होगा।`,
+        type: 'game',
+      });
+      if (io) {
+        io.to(`user_${player.userId}`).emit('notification:new', notif);
+        io.to(`user_${player.userId}`).emit('ludo:cancel-accepted', { matchId: match._id.toString() });
+      }
+    }
+
+    res.json({ message: 'Cancel accepted. Admin will decide the refund amounts.', requestId: request._id });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Submit win claim after opponent's cancel request (dispute)
+// @route   POST /api/ludo/submit-win-dispute (multipart: screenshot)
+const submitWinDispute = async (req, res) => {
+  try {
+    const { matchId, winReasonCode, winReasonCustom } = req.body;
+    if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
+    if (!winReasonCode) return res.status(400).json({ message: 'Win reason is required' });
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ message: 'Screenshot is required' });
+    }
+
+    const match = await LudoMatch.findById(matchId);
+    if (!match) return res.status(404).json({ message: 'Match not found' });
+
+    const userId = req.user._id.toString();
+    const isPlayer = match.players.some((p) => p.userId.toString() === userId);
+    if (!isPlayer) return res.status(403).json({ message: 'You are not in this match' });
+
+    if (match.status !== 'cancel_requested') {
+      return res.status(400).json({ message: 'No pending cancel request for this match' });
+    }
+    // Only the OTHER player (not the canceller) can submit win dispute
+    if (match.cancelRequestedBy.toString() === userId) {
+      return res.status(400).json({ message: 'You cannot submit a win claim on your own cancel request' });
+    }
+
+    let request = await LudoResultRequest.findOne({ matchId: match._id });
+    if (request) {
+      return res.status(400).json({ message: 'A result request already exists for this match.' });
+    }
+
+    let screenshotUrl;
+    try {
+      const compressedBuffer = await sharp(req.file.buffer)
+        .resize({ width: 1200, withoutEnlargement: true })
+        .jpeg({ quality: 70 })
+        .toBuffer();
+      screenshotUrl = await uploadFromBuffer(compressedBuffer, 'lean_aviator/ludo_results', 'image/jpeg');
+    } catch (uploadErr) {
+      console.error(uploadErr);
+      return res.status(500).json({ message: 'Failed to upload screenshot' });
+    }
+
+    const winReasonLabel = WIN_REASON_LABELS[winReasonCode] || winReasonCode;
+    const displayWinReason = winReasonCode === 'other' ? (winReasonCustom || 'अन्य') : winReasonLabel;
+
+    request = await LudoResultRequest.create({
+      matchId: match._id,
+      disputeType: 'cancel_dispute',
+      claims: [{
+        userId: req.user._id,
+        userName: req.user.name,
+        type: 'win_dispute',
+        screenshotUrl,
+        winReasonCode,
+        winReasonCustom: winReasonCode === 'other' ? winReasonCustom : null,
+        createdAt: new Date(),
+      }],
+      status: 'pending',
+    });
+
+    const io = req.app.get('io');
+    io.to('admins').emit('admin:ludo-result-request', {
+      requestId: request._id,
+      matchId: match._id,
+      userName: req.user.name,
+      disputeType: 'cancel_dispute',
+    });
+
+    await Notification.create({
+      userId: req.user._id,
+      title: 'Win Dispute Submitted',
+      message: `आपका win claim submit हो गया (कारण: "${displayWinReason}")। Admin verify करेगा।`,
+      type: 'game',
+    });
+
+    // Notify the canceller that opponent disputed
+    const cancellerPlayer = match.players.find((p) => p.userId.toString() === match.cancelRequestedBy.toString());
+    if (cancellerPlayer) {
+      const notif = await Notification.create({
+        userId: cancellerPlayer.userId,
+        title: 'Opponent ने Win Claim किया',
+        message: `${req.user.name} ने आपकी cancel request को dispute किया है। Admin decide करेगा।`,
+        type: 'game',
+      });
+      if (io) {
+        io.to(`user_${cancellerPlayer.userId}`).emit('notification:new', notif);
+        // Trigger UI refresh on canceller's screen
+        io.to(`user_${cancellerPlayer.userId}`).emit('ludo:win-dispute-submitted', { matchId: match._id.toString() });
+      }
+    }
+
+    res.status(201).json({ message: 'Win dispute submitted. Admin will review and decide.', request: { _id: request._id } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 // @desc    Cancel match — 3 cases: waiting (creator only), live+no room code (either player), live+room code (reject)
 // @route   POST /api/ludo/cancel
 const cancelMatch = async (req, res) => {
@@ -362,20 +619,20 @@ const getMyMatches = async (req, res) => {
     if (status === 'waiting') {
       query.status = 'waiting';
     } else if (status === 'live') {
-      query.status = 'live';
+      // Include both live and cancel_requested (so both players can see and respond)
+      query.status = { $in: ['live', 'cancel_requested'] };
       // Exclude matches that already have a result request (pending admin review)
       const matchIdsWithResult = await LudoResultRequest.find({}).distinct('matchId');
       if (matchIdsWithResult.length > 0) {
         query._id = { $nin: matchIdsWithResult };
       }
     } else if (status === 'requested') {
-      // Matches that are still 'live' but have a result request (pending admin review)
-      query.status = 'live';
+      // Matches with a result request (pending admin review) — includes cancel disputes
+      query.status = { $in: ['live', 'cancel_requested'] };
       const matchIdsWithResult = await LudoResultRequest.find({}).distinct('matchId');
       if (matchIdsWithResult.length > 0) {
         query._id = { $in: matchIdsWithResult };
       } else {
-        // No result requests exist, return empty
         return res.json({ records: [], totalCount: 0, page: 1, totalPages: 0 });
       }
     } else if (status === 'history') {
@@ -470,11 +727,14 @@ const submitResult = async (req, res) => {
       return res.status(500).json({ message: 'Failed to upload screenshot' });
     }
 
+    const { winReasonCode, winReasonCustom } = req.body;
     const claim = {
       userId: req.user._id,
       userName: req.user.name,
       type: 'win',
       screenshotUrl,
+      winReasonCode: winReasonCode || null,
+      winReasonCustom: winReasonCode === 'other' ? (winReasonCustom || null) : null,
       createdAt: new Date(),
     };
 
@@ -797,6 +1057,9 @@ module.exports = {
   submitRoomCode,
   joinMatch,
   cancelMatch,
+  requestCancel,
+  acceptCancel,
+  submitWinDispute,
   checkMatchWaiting,
   checkExpiry,
   getMyMatches,
