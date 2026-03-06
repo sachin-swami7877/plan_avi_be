@@ -86,6 +86,10 @@ const userSchema = new mongoose.Schema({
   otpExpiry: {
     type: Date,
     default: null
+  },
+  fcmTokens: {
+    type: [String],
+    default: []
   }
 }, {
   timestamps: true
@@ -112,6 +116,7 @@ userSchema.methods.smartDeduct = function (amount) {
   this.depositBalance -= fromDeposit;
   this.earningsBalance -= fromEarnings;
   this.walletBalance -= amount;
+  return { fromDeposit, fromEarnings };
 };
 
 userSchema.methods.smartDeductWithdrawal = function (amount) {
@@ -130,6 +135,22 @@ userSchema.methods.creditDeposit = function (amount) {
 
 userSchema.methods.creditEarnings = function (amount) {
   this.earningsBalance += amount;
+  this.walletBalance += amount;
+};
+
+// Smart refund — credits back to deposit/earnings based on how it was originally deducted
+userSchema.methods.smartRefund = function (amount, paidFromDeposit, paidFromEarnings) {
+  if (paidFromDeposit != null && paidFromEarnings != null && (paidFromDeposit + paidFromEarnings) > 0) {
+    // Refund proportionally based on original split
+    const total = paidFromDeposit + paidFromEarnings;
+    const refundToDeposit = Math.round((paidFromDeposit / total) * amount * 100) / 100;
+    const refundToEarnings = amount - refundToDeposit;
+    this.depositBalance += refundToDeposit;
+    this.earningsBalance += refundToEarnings;
+  } else {
+    // Fallback: if no tracking info, credit to deposit (safe default)
+    this.depositBalance += amount;
+  }
   this.walletBalance += amount;
 };
 

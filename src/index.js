@@ -21,6 +21,7 @@ const { startCleanupCron } = require('./services/cleanupEmptyRounds');
 const { startLudoCron } = require('./services/ludoCron');
 const { startNotificationCron } = require('./services/notificationCron');
 const { startOldBetsCron } = require('./services/cleanupOldBets');
+const { initFirebase } = require('./config/firebase');
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +44,9 @@ const io = new Server(server, { cors: corsOptions });
 
 // Connect to database
 connectDB();
+
+// Initialize Firebase (push notifications)
+initFirebase();
 
 // Middleware
 app.use(cors(corsOptions));

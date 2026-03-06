@@ -266,7 +266,7 @@ const updateLudoMatchStatus = async (req, res) => {
         if (u) {
           if (shouldRefund) {
             const balBef = u.walletBalance;
-            u.creditEarnings(p.amountPaid);
+            u.smartRefund(p.amountPaid, p.paidFromDeposit, p.paidFromEarnings);
             await u.save();
             await recordWalletTx(
               p.userId, 'credit', 'ludo_refund', p.amountPaid,
@@ -461,7 +461,7 @@ const resolveDispute = async (req, res) => {
           const pUser = await User.findById(player.userId);
           if (pUser) {
             const balBef = pUser.walletBalance;
-            pUser.creditEarnings(refundAmount);
+            pUser.smartRefund(refundAmount, player.paidFromDeposit, player.paidFromEarnings);
             await pUser.save();
             await recordWalletTx(
               pUser._id, 'credit', 'ludo_refund', refundAmount,

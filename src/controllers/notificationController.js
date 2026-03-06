@@ -1,4 +1,5 @@
 const Notification = require('../models/Notification');
+const User = require('../models/User');
 
 // @desc    Get user notifications (last 7 days only)
 // @route   GET /api/notifications?page=1&limit=25
@@ -90,9 +91,45 @@ const getUnreadCount = async (req, res) => {
   }
 };
 
+// @desc    Save FCM push token for current user
+// @route   POST /api/notifications/fcm-token
+const saveFcmToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: 'Token is required' });
+
+    await User.findByIdAndUpdate(req.user._id, {
+      $addToSet: { fcmTokens: token },
+    });
+    res.json({ message: 'Token saved' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Remove FCM push token (on logout)
+// @route   DELETE /api/notifications/fcm-token
+const removeFcmToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: 'Token is required' });
+
+    await User.findByIdAndUpdate(req.user._id, {
+      $pull: { fcmTokens: token },
+    });
+    res.json({ message: 'Token removed' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getNotifications,
   markAsRead,
   markAllAsRead,
-  getUnreadCount
+  getUnreadCount,
+  saveFcmToken,
+  removeFcmToken,
 };

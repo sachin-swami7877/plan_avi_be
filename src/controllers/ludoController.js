@@ -38,18 +38,18 @@ const createMatch = async (req, res) => {
 
     const joinExpiryAt = new Date(Date.now() + WAITING_EXPIRY_MINUTES * 60 * 1000);
 
+    const balBeforeCreate = user.walletBalance;
+    const { fromDeposit, fromEarnings } = user.smartDeduct(amount);
+    await user.save();
+
     const match = await LudoMatch.create({
       entryAmount: amount,
       creatorId: req.user._id,
       creatorName: user.name,
       status: 'waiting',
-      players: [{ userId: req.user._id, userName: user.name, amountPaid: amount, joinedAt: new Date() }],
+      players: [{ userId: req.user._id, userName: user.name, amountPaid: amount, paidFromDeposit: fromDeposit, paidFromEarnings: fromEarnings, joinedAt: new Date() }],
       joinExpiryAt,
     });
-
-    const balBeforeCreate = user.walletBalance;
-    user.smartDeduct(amount);
-    await user.save();
 
     await recordWalletTx(
       user._id, 'debit', 'ludo_entry', amount,
@@ -173,7 +173,7 @@ const joinMatch = async (req, res) => {
     }
 
     const balBeforeJoin = user.walletBalance;
-    user.smartDeduct(match.entryAmount);
+    const { fromDeposit, fromEarnings } = user.smartDeduct(match.entryAmount);
     await user.save();
 
     await recordWalletTx(
@@ -186,6 +186,8 @@ const joinMatch = async (req, res) => {
       userId: req.user._id,
       userName: user.name,
       amountPaid: match.entryAmount,
+      paidFromDeposit: fromDeposit,
+      paidFromEarnings: fromEarnings,
       joinedAt: new Date(),
     });
     match.status = 'live';
@@ -501,8 +503,9 @@ const cancelMatch = async (req, res) => {
       }
 
       const user = await User.findById(req.user._id);
+      const creatorPlayer = match.players.find(p => p.userId.toString() === user._id.toString());
       const balBeforeCancel = user.walletBalance;
-      user.creditEarnings(match.entryAmount);
+      user.smartRefund(match.entryAmount, creatorPlayer?.paidFromDeposit, creatorPlayer?.paidFromEarnings);
       await user.save();
 
       await recordWalletTx(
@@ -542,7 +545,7 @@ const cancelMatch = async (req, res) => {
         const pUser = await User.findById(player.userId);
         if (pUser) {
           const balBef = pUser.walletBalance;
-          pUser.creditEarnings(player.amountPaid);
+          pUser.smartRefund(player.amountPaid, player.paidFromDeposit, player.paidFromEarnings);
           await pUser.save();
           await recordWalletTx(
             pUser._id, 'credit', 'ludo_refund', player.amountPaid,
@@ -875,13 +878,14 @@ const cancelAsLoss = async (req, res) => {
     if (!otherPlayer) return res.status(400).json({ message: 'Invalid match' });
 
     // Canceller gets nothing — no wallet update
-    if (cancellerRefund > 0) canceller.creditEarnings(cancellerRefund);
+    const cancellerPlayer = match.players.find((p) => p.userId.toString() === userId);
+    if (cancellerRefund > 0) canceller.smartRefund(cancellerRefund, cancellerPlayer?.paidFromDeposit, cancellerPlayer?.paidFromEarnings);
     await canceller.save();
 
     const otherUser = await User.findById(otherPlayer.userId);
     if (otherUser) {
       const balBeforeOther = otherUser.walletBalance;
-      otherUser.creditEarnings(otherRefund);
+      otherUser.smartRefund(otherRefund, otherPlayer.paidFromDeposit, otherPlayer.paidFromEarnings);
       await otherUser.save();
       await recordWalletTx(
         otherUser._id, 'credit', 'ludo_refund', otherRefund,
@@ -1014,7 +1018,7 @@ const checkExpiry = async (req, res) => {
       const u = await User.findById(player.userId);
       if (u) {
         const balBef = u.walletBalance;
-        u.creditEarnings(player.amountPaid);
+        u.smartRefund(player.amountPaid, player.paidFromDeposit, player.paidFromEarnings);
         await u.save();
         await recordWalletTx(
           u._id, 'credit', 'ludo_refund', player.amountPaid,

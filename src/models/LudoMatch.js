@@ -33,6 +33,8 @@ const ludoMatchSchema = new mongoose.Schema({
       userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       userName: { type: String },
       amountPaid: { type: Number },
+      paidFromDeposit: { type: Number, default: 0 },
+      paidFromEarnings: { type: Number, default: 0 },
       joinedAt: { type: Date, default: Date.now },
     },
   ],

@@ -6,6 +6,7 @@ const Notification = require('../models/Notification');
 const AdminSettings = require('../models/AdminSettings');
 const { uploadFromBuffer } = require('../config/cloudinary');
 const { recordWalletTx } = require('../utils/recordWalletTx');
+const { sendPushToAdmins } = require('../config/firebase');
 
 // @desc    Get payment info for deposits (dynamic from AdminSettings)
 // @route   GET /api/wallet/payment-info
@@ -115,6 +116,13 @@ const createDepositRequest = async (req, res) => {
 
     console.log(`\n💰 NEW DEPOSIT REQUEST — User: ${req.user.name}, Amount: ₹${amount}, UTR: ${utrNumber}\n`);
 
+    // Push notification to admins
+    sendPushToAdmins(
+      '💰 New Deposit Request',
+      `${req.user.name} ने ₹${amount} deposit request भेजी है`,
+      { type: 'deposit_request' }
+    );
+
     res.status(201).json({
       message: 'Deposit request submitted successfully',
       request: walletRequest,
@@ -202,6 +210,13 @@ const createWithdrawalRequest = async (req, res) => {
     io.to(`user_${req.user._id}`).emit('notification:new', notification);
 
     console.log(`\n💸 NEW WITHDRAWAL REQUEST — User: ${req.user.name}, Amount: ₹${amount}\n`);
+
+    // Push notification to admins
+    sendPushToAdmins(
+      '💸 New Withdrawal Request',
+      `${req.user.name} ने ₹${amount} withdrawal request भेजी है`,
+      { type: 'withdrawal_request' }
+    );
 
     res.status(201).json({
       message: 'Withdrawal request submitted successfully',

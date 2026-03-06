@@ -12,6 +12,7 @@ const LudoMatch = require('../models/LudoMatch');
 const LudoResultRequest = require('../models/LudoResultRequest');
 const { uploadFromBuffer } = require('../config/cloudinary');
 const { recordWalletTx } = require('../utils/recordWalletTx');
+const { sendPushNotification } = require('../config/firebase');
 
 // ──────────────────────── HELPERS ────────────────────────
 async function getOrCreateSettings() {
@@ -495,6 +496,17 @@ const processWalletRequest = async (req, res) => {
     const io = req.app.get('io');
     io.to(`user_${walletRequest.userId}`).emit('notification:new', notification);
     io.to(`user_${walletRequest.userId}`).emit('wallet:balance-updated', { walletBalance: newBalance });
+
+    // Push notification to user
+    if (user.fcmTokens && user.fcmTokens.length > 0) {
+      const pushTitle = action === 'approve'
+        ? (walletRequest.type === 'deposit' ? '✅ Deposit Approved' : '✅ Withdrawal Approved')
+        : (walletRequest.type === 'deposit' ? '❌ Deposit Rejected' : '❌ Withdrawal Rejected');
+      const pushBody = action === 'approve'
+        ? `आपकी ₹${walletRequest.amount} ${walletRequest.type} request approve हो गई है!`
+        : `आपकी ₹${walletRequest.amount} ${walletRequest.type} request reject कर दी गई है।`;
+      sendPushNotification(user._id, user.fcmTokens, pushTitle, pushBody, { type: `${walletRequest.type}_${action}` });
+    }
 
     res.json({ message: `Request ${action}d successfully`, request: walletRequest, userNewBalance: newBalance });
   } catch (error) {
