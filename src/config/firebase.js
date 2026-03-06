@@ -26,6 +26,8 @@ function initFirebase() {
   }
 }
 
+const SITE_URL = 'https://rushkroludo.com';
+
 /**
  * Send push notification to an array of FCM tokens.
  * Silently removes invalid/expired tokens from the user's DB record.
@@ -34,12 +36,22 @@ async function sendPushNotification(userId, tokens, title, body, data = {}) {
   if (!messaging || !tokens || tokens.length === 0) return;
 
   const message = {
-    notification: { title, body },
-    data: { ...data, click_action: '/' },
+    data: {
+      ...data,
+      title,
+      body,
+    },
     webpush: {
       notification: {
-        icon: '/icon-192.png',
-        badge: '/icon-192.png',
+        title,
+        body,
+        icon: `${SITE_URL}/icon-192.png`,
+        badge: `${SITE_URL}/icon-192.png`,
+        tag: data.type || 'general',
+        renotify: 'true',
+      },
+      fcm_options: {
+        link: SITE_URL,
       },
     },
   };

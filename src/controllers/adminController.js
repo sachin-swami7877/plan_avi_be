@@ -500,11 +500,11 @@ const processWalletRequest = async (req, res) => {
     // Push notification to user
     if (user.fcmTokens && user.fcmTokens.length > 0) {
       const pushTitle = action === 'approve'
-        ? (walletRequest.type === 'deposit' ? '✅ Deposit Approved' : '✅ Withdrawal Approved')
-        : (walletRequest.type === 'deposit' ? '❌ Deposit Rejected' : '❌ Withdrawal Rejected');
+        ? (walletRequest.type === 'deposit' ? 'Deposit Approved' : 'Withdrawal Approved')
+        : (walletRequest.type === 'deposit' ? 'Deposit Rejected' : 'Withdrawal Rejected');
       const pushBody = action === 'approve'
-        ? `आपकी ₹${walletRequest.amount} ${walletRequest.type} request approve हो गई है!`
-        : `आपकी ₹${walletRequest.amount} ${walletRequest.type} request reject कर दी गई है।`;
+        ? `Aapki Rs.${walletRequest.amount} ${walletRequest.type} request approve ho gayi hai!`
+        : `Aapki Rs.${walletRequest.amount} ${walletRequest.type} request reject kar di gayi hai.`;
       sendPushNotification(user._id, user.fcmTokens, pushTitle, pushBody, { type: `${walletRequest.type}_${action}` });
     }
 

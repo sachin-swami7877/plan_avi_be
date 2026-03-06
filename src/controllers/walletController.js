@@ -118,8 +118,8 @@ const createDepositRequest = async (req, res) => {
 
     // Push notification to admins
     sendPushToAdmins(
-      '💰 New Deposit Request',
-      `${req.user.name} ने ₹${amount} deposit request भेजी है`,
+      'New Deposit Request',
+      `${req.user.name} ne Rs.${amount} deposit request bheji hai`,
       { type: 'deposit_request' }
     );
 
@@ -213,8 +213,8 @@ const createWithdrawalRequest = async (req, res) => {
 
     // Push notification to admins
     sendPushToAdmins(
-      '💸 New Withdrawal Request',
-      `${req.user.name} ने ₹${amount} withdrawal request भेजी है`,
+      'New Withdrawal Request',
+      `${req.user.name} ne Rs.${amount} withdrawal request bheji hai`,
       { type: 'withdrawal_request' }
     );
 
