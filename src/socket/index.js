@@ -87,6 +87,39 @@ const initSocket = (io) => {
       socket.leave('game');
     });
 
+    // ── Fast cashout via socket (avoids HTTP overhead) ──
+    socket.on('game:cashout', async (callback) => {
+      if (!socket.user) {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        return cb({ error: 'Not authenticated' });
+      }
+      try {
+        const gameEngine = io._gameEngine;
+        if (!gameEngine) throw new Error('Game not available');
+
+        const result = await gameEngine.cashOut(socket.user._id);
+
+        // Broadcast cashout to all game subscribers
+        io.to('game').emit('bet:cashout', {
+          userName: socket.user.name,
+          multiplier: result.cashOutMultiplier,
+          profit: result.profit,
+        });
+
+        // Respond to the caller
+        const cb = typeof callback === 'function' ? callback : () => {};
+        cb({
+          success: true,
+          cashOutMultiplier: result.cashOutMultiplier,
+          profit: result.profit,
+          newBalance: result.newBalance,
+        });
+      } catch (err) {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        cb({ error: err.message || 'Failed to cash out' });
+      }
+    });
+
     // Handle disconnect
     socket.on('disconnect', () => {
       console.log(`🔌 Socket disconnected: ${socket.id}`);
