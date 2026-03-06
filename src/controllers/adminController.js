@@ -952,6 +952,8 @@ const getSettings = async (req, res) => {
       termsGeneral: settings.termsGeneral,
       dummyUserCount: settings.dummyUserCount || 10,
       layout: settings.layout || false,
+      landingPlayers: settings.landingPlayers || '1000+',
+      landingWonToday: settings.landingWonToday || '₹1K+',
       userWarning: settings.userWarning || '',
       ludoDummyRunningBattles: settings.ludoDummyRunningBattles ?? 15,
       ludoEnabled: settings.ludoEnabled ?? true,
@@ -981,6 +983,8 @@ const updateSettings = async (req, res) => {
       termsDeposit, termsWithdrawal, termsGeneral,
       dummyUserCount,
       layout,
+      landingPlayers,
+      landingWonToday,
       ludoDummyRunningBattles,
       userWarning,
       ludoCommTier1Max, ludoCommTier1Pct,
@@ -1012,6 +1016,8 @@ const updateSettings = async (req, res) => {
     if (termsGeneral !== undefined) settings.termsGeneral = termsGeneral;
     if (dummyUserCount !== undefined) settings.dummyUserCount = Number(dummyUserCount);
     if (layout !== undefined) settings.layout = Boolean(layout);
+    if (landingPlayers !== undefined) settings.landingPlayers = landingPlayers;
+    if (landingWonToday !== undefined) settings.landingWonToday = landingWonToday;
     if (ludoDummyRunningBattles !== undefined) {
       const n = Number(ludoDummyRunningBattles);
       if (n >= 0 && n <= 50) settings.ludoDummyRunningBattles = n;
@@ -1132,6 +1138,21 @@ const getPublicLayout = async (req, res) => {
   }
 };
 
+// @desc    Get landing page stats (public)
+// @route   GET /api/settings/landing-stats
+const getPublicLandingStats = async (req, res) => {
+  try {
+    const s = await getOrCreateSettings();
+    res.json({
+      landingPlayers: s.landingPlayers || '1000+',
+      landingWonToday: s.landingWonToday || '₹1K+',
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 // @desc    Get user warning (public)
 // @route   GET /api/settings/user-warning
 const getPublicUserWarning = async (req, res) => {
@@ -1245,4 +1266,5 @@ module.exports = {
   getPublicTerms,
   getPublicLayout,
   getPublicUserWarning,
+  getPublicLandingStats,
 };

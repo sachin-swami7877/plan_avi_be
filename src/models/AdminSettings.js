@@ -25,6 +25,9 @@ const adminSettingsSchema = new mongoose.Schema({
   dummyUserCount: { type: Number, default: 10 },
   // Landing Page Layout
   layout: { type: Boolean, default: false },
+  // Landing Page Stats (displayed on landing page stats bar)
+  landingPlayers: { type: String, default: '1000+' },
+  landingWonToday: { type: String, default: '₹1K+' },
   // User Warning (shown on dashboard)
   userWarning: { type: String, default: '' },
   // Ludo: number of dummy running battles to show on user app (frontend generates them)
