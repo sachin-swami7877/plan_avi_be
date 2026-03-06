@@ -37,7 +37,7 @@ router.get('/settings', getLudoSettings);
 router.get('/my-matches', getMyMatches);
 router.get('/match/:id', getMatchDetail);
 router.post('/submit-result', upload.single('screenshot'), submitResult);
-router.post('/submit-loss', submitLoss);
+router.post('/submit-loss', upload.single('screenshot'), submitLoss);
 router.post('/cancel-as-loss', cancelAsLoss);
 router.get('/waiting-list', getWaitingList);
 router.get('/running-battles', getRunningBattles);

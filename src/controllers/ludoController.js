@@ -791,12 +791,15 @@ const submitResult = async (req, res) => {
   }
 };
 
-// @desc    Submit "I lost" - add loss claim to same request (no screenshot)
+// @desc    Submit "I lost" - add loss claim to same request (screenshot required)
 // @route   POST /api/ludo/submit-loss
 const submitLoss = async (req, res) => {
   try {
     const { matchId } = req.body;
     if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ message: 'Screenshot is required' });
+    }
 
     const match = await LudoMatch.findById(matchId);
     if (!match) return res.status(404).json({ message: 'Match not found' });
@@ -816,11 +819,23 @@ const submitLoss = async (req, res) => {
       return res.status(400).json({ message: 'This match result is already resolved.' });
     }
 
+    let screenshotUrl;
+    try {
+      const compressedBuffer = await sharp(req.file.buffer)
+        .resize({ width: 1200, withoutEnlargement: true })
+        .jpeg({ quality: 70 })
+        .toBuffer();
+      screenshotUrl = await uploadFromBuffer(compressedBuffer, 'lean_aviator/ludo_results', 'image/jpeg');
+    } catch (uploadErr) {
+      console.error(uploadErr);
+      return res.status(500).json({ message: 'Failed to upload screenshot' });
+    }
+
     const claim = {
       userId: req.user._id,
       userName: req.user.name,
       type: 'loss',
-      screenshotUrl: null,
+      screenshotUrl,
       createdAt: new Date(),
     };
 
