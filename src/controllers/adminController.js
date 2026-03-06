@@ -1192,8 +1192,24 @@ const getUserTransactions = async (req, res) => {
   }
 };
 
+// Lightweight pending counts for admin badge indicators
+const getPendingCounts = async (req, res) => {
+  try {
+    const LudoResultRequest = require('../models/LudoResultRequest');
+    const [pendingDeposits, pendingWithdrawals, pendingLudo] = await Promise.all([
+      WalletRequest.countDocuments({ type: 'deposit', status: 'pending' }),
+      WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending' }),
+      LudoResultRequest.countDocuments({ status: 'pending' }),
+    ]);
+    res.json({ pendingDeposits, pendingWithdrawals, pendingLudo });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getDashboardStats,
+  getPendingCounts,
   getUsers,
   createUser,
   updateUser,

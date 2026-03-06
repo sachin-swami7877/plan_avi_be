@@ -7,6 +7,7 @@ const AdminSettings = require('../models/AdminSettings');
 const { uploadFromBuffer } = require('../config/cloudinary');
 const { calcLudoCommission, getCommissionTiers } = require('../utils/ludoCommission');
 const { recordWalletTx } = require('../utils/recordWalletTx');
+const { sendPushToAdmins } = require('../config/firebase');
 
 const ENTRY_MIN = 50;
 const WAITING_EXPIRY_MINUTES = 10;
@@ -477,6 +478,13 @@ const submitWinDispute = async (req, res) => {
       }
     }
 
+    // Push notification to admins
+    sendPushToAdmins(
+      'Ludo Win Dispute',
+      `${req.user.name} ne win dispute submit kiya - Rs.${match.entryAmount} match`,
+      { type: 'ludo_dispute' }
+    );
+
     res.status(201).json({ message: 'Win dispute submitted. Admin will review and decide.', request: { _id: request._id } });
   } catch (error) {
     console.error(error);
@@ -765,6 +773,13 @@ const submitResult = async (req, res) => {
       message: 'Your Ludo match result has been submitted for admin approval.',
       type: 'game',
     });
+
+    // Push notification to admins
+    sendPushToAdmins(
+      'Ludo Result Submitted',
+      `${req.user.name} ne Rs.${match.entryAmount} match ka result submit kiya`,
+      { type: 'ludo_result' }
+    );
 
     res.status(201).json({
       message: 'Result submitted. Admin will verify and approve.',

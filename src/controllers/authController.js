@@ -3,6 +3,7 @@ const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { sendOtpSms } = require('../services/smsIndiaHub');
+const { sendPushToAdmins } = require('../config/firebase');
 
 // Temporary in-memory store for OTPs of unverified (not yet created) phone users
 // Key: 10-digit phone, Value: { otp, otpExpiry }
@@ -221,8 +222,21 @@ const verifyOTP = async (req, res) => {
           return res.status(400).json({ message: 'OTP expired' });
         }
         // OTP verified — find existing user (admin-created) or create new
-        user = await User.findOne({ phone: last10 }) || await User.create({ phone: last10, name: null });
+        const existingUser = await User.findOne({ phone: last10 });
+        const isNewUser = !existingUser;
+        user = existingUser || await User.create({ phone: last10, name: null });
         pendingPhoneOtps.delete(last10);
+
+        // Notify admins about new user registration
+        if (isNewUser) {
+          const io = req.app.get('io');
+          if (io) io.to('admins').emit('admin:new-user', { phone: last10, userId: user._id });
+          sendPushToAdmins(
+            'New User Registered',
+            `New user registered with phone ${last10}`,
+            { type: 'new_user' }
+          );
+        }
 
         const token = generateToken(user._id);
         return res.json({
@@ -266,6 +280,17 @@ const verifyOTP = async (req, res) => {
     const needsUsername = !user.name || user.name.trim() === '';
     const needsPhone = !user.phone || String(user.phone).trim() === '';
     const needsProfile = needsUsername || needsPhone;
+
+    // Notify admins if this is a brand new user (created < 5 min ago, no name yet)
+    if (needsProfile && user.createdAt && (Date.now() - new Date(user.createdAt).getTime()) < 5 * 60 * 1000) {
+      const io = req.app.get('io');
+      if (io) io.to('admins').emit('admin:new-user', { email: user.email, phone: user.phone, userId: user._id });
+      sendPushToAdmins(
+        'New User Registered',
+        `New user registered: ${user.email || user.phone}`,
+        { type: 'new_user' }
+      );
+    }
 
     res.json({
       _id: user._id,

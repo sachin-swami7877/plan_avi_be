@@ -33,6 +33,7 @@ const {
   updateSettings,
   uploadQrCode,
   getBonusRecords,
+  getPendingCounts,
 } = require('../controllers/adminController');
 const {
   getAllLudoMatches,
@@ -52,6 +53,7 @@ router.use(protect);
 router.use(adminOnly);
 
 router.get('/dashboard', getDashboardStats);
+router.get('/pending-counts', getPendingCounts);
 router.get('/active-users', (req, res) => {
   const io = req.app.get('io');
   const activeUsers = io?._activeUsers;

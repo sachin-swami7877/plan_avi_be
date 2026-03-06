@@ -3,6 +3,7 @@ const LudoMatch = require('../models/LudoMatch');
 const LudoResultRequest = require('../models/LudoResultRequest');
 const { calcLudoCommission } = require('../utils/ludoCommission');
 const { recordWalletTx } = require('../utils/recordWalletTx');
+const { sendPushNotification } = require('../config/firebase');
 
 // @desc    All Ludo matches (with filters); live matches with pending result request get hasPendingRequest: true
 // @route   GET /api/admin/ludo/matches?status=waiting|live|completed|cancelled&page=1&limit=20
@@ -193,6 +194,26 @@ const approveLudoResultRequest = async (req, res) => {
       io.emit('ludo:waiting-updated');
     }
 
+    // Push notification to winner
+    if (winner.fcmTokens?.length > 0) {
+      sendPushNotification(winner._id, winner.fcmTokens,
+        'You Won the Ludo Match!',
+        `Congratulations! Rs.${winnerAmount} aapke wallet mein credit ho gaye.`,
+        { type: 'ludo_win' }
+      );
+    }
+    // Push notification to loser
+    if (loserPlayer) {
+      const loserUser = await User.findById(loserPlayer.userId).select('fcmTokens');
+      if (loserUser?.fcmTokens?.length > 0) {
+        sendPushNotification(loserUser._id, loserUser.fcmTokens,
+          'Ludo Match Result',
+          `Aap Rs.${match.entryAmount} Ludo match haar gaye. Better luck next time!`,
+          { type: 'ludo_loss' }
+        );
+      }
+    }
+
     res.json({
       message: 'Result approved. Winner credited.',
       match,
@@ -237,6 +258,15 @@ const rejectLudoResultRequest = async (req, res) => {
         type: 'game',
       });
       if (io) io.to(`user_${uid}`).emit('notification:new', notif);
+      // Push notification
+      const u = await User.findById(uid).select('fcmTokens');
+      if (u?.fcmTokens?.length > 0) {
+        sendPushNotification(u._id, u.fcmTokens,
+          'Ludo Result Rejected',
+          'Admin ne aapki result request reject kar di. Dubara submit karein ya support se contact karein.',
+          { type: 'ludo_reject' }
+        );
+      }
     }
 
     res.json({ message: 'Result request rejected' });
@@ -284,6 +314,16 @@ const updateLudoMatchStatus = async (req, res) => {
             type: 'game',
           });
           if (io) io.to(`user_${p.userId}`).emit('notification:new', notif);
+          // Push notification
+          if (u.fcmTokens?.length > 0) {
+            sendPushNotification(u._id, u.fcmTokens,
+              'Ludo Match Cancelled',
+              shouldRefund
+                ? `Admin ne match cancel kiya. Rs.${p.amountPaid} aapke wallet mein wapas.`
+                : 'Admin ne match cancel kiya. Koi refund nahi milega.',
+              { type: 'ludo_cancel' }
+            );
+          }
         }
       }
       await match.save();
@@ -393,6 +433,14 @@ const resolveDispute = async (req, res) => {
           type: 'game',
         });
         if (io) io.to(`user_${winner._id}`).emit('notification:new', winNotif);
+        // Push to winner
+        if (winner.fcmTokens?.length > 0) {
+          sendPushNotification(winner._id, winner.fcmTokens,
+            'Dispute Resolved - You Won!',
+            `Admin ne dispute resolve kiya. Rs.${winnerAmount} aapke wallet mein credit.`,
+            { type: 'ludo_dispute_win' }
+          );
+        }
         savedDecisions.push({ userId: winner._id, userName: winner.name || winnerPlayer.userName, refundType: 'full', amount: winnerAmount });
       }
 
@@ -406,6 +454,15 @@ const resolveDispute = async (req, res) => {
             type: 'game',
           });
           if (io) io.to(`user_${player.userId}`).emit('notification:new', loserNotif);
+          // Push to loser
+          const loserUser = await User.findById(player.userId).select('fcmTokens');
+          if (loserUser?.fcmTokens?.length > 0) {
+            sendPushNotification(loserUser._id, loserUser.fcmTokens,
+              'Dispute Resolved',
+              `Admin ne ${winnerPlayer.userName} ko winner declare kiya. Koi refund nahi milega.`,
+              { type: 'ludo_dispute_loss' }
+            );
+          }
           savedDecisions.push({ userId: player.userId, userName: player.userName, refundType: 'zero', amount: 0 });
         }
       }
@@ -487,6 +544,17 @@ const resolveDispute = async (req, res) => {
           type: 'game',
         });
         if (io) io.to(`user_${player.userId}`).emit('notification:new', notif);
+        // Push notification for refund decision
+        const pUser = await User.findById(player.userId).select('fcmTokens');
+        if (pUser?.fcmTokens?.length > 0) {
+          sendPushNotification(pUser._id, pUser.fcmTokens,
+            'Dispute Resolved',
+            refundAmount > 0
+              ? `Admin ne dispute resolve kiya. Rs.${refundAmount} aapke wallet mein wapas.`
+              : 'Admin ne dispute resolve kiya. Koi refund nahi milega.',
+            { type: 'ludo_dispute_resolved' }
+          );
+        }
       }
 
       match.status = 'cancelled';
