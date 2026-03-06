@@ -72,6 +72,21 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Aviator API is running' });
 });
 
+// Multer error handling (file too large, wrong format)
+const multer = require('multer');
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: 'File too large. Maximum size is 15MB.' });
+    }
+    return res.status(400).json({ message: err.message });
+  }
+  if (err && err.message && err.message.includes('image files are allowed')) {
+    return res.status(400).json({ message: err.message });
+  }
+  next(err);
+});
+
 // Initialize socket handlers
 initSocket(io);
 
