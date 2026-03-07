@@ -97,6 +97,20 @@ const getLudoResultRequests = async (req, res) => {
       .limit(50)
       .lean();
 
+    // Auto-clean: if match already completed/cancelled, resolve stale pending requests
+    if (status === 'pending') {
+      const staleIds = requests
+        .filter((r) => r.matchId && ['completed', 'cancelled'].includes(r.matchId.status))
+        .map((r) => r._id);
+      if (staleIds.length > 0) {
+        await LudoResultRequest.updateMany(
+          { _id: { $in: staleIds } },
+          { status: 'resolved', adminNote: 'Auto-resolved — match already settled' }
+        );
+        return res.json(requests.filter((r) => !staleIds.some((id) => id.toString() === r._id.toString())));
+      }
+    }
+
     res.json(requests);
   } catch (error) {
     console.error(error);
@@ -119,6 +133,18 @@ const approveLudoResultRequest = async (req, res) => {
 
     const match = await LudoMatch.findById(request.matchId);
     if (!match) return res.status(404).json({ message: 'Match not found' });
+
+    // If match already completed/cancelled with a winner, auto-resolve the request
+    if (['completed', 'cancelled'].includes(match.status) && match.winnerId) {
+      request.winnerId = match.winnerId;
+      request.status = 'resolved';
+      request.reviewedBy = req.user._id;
+      request.reviewedAt = new Date();
+      request.adminNote = 'Auto-resolved — match already settled';
+      await request.save();
+      return res.json({ message: 'Match was already settled. Request auto-resolved.', match });
+    }
+
     if (!['live', 'cancel_requested'].includes(match.status)) {
       return res.status(400).json({ message: 'Match is not in a valid state for approval' });
     }
@@ -327,6 +353,11 @@ const updateLudoMatchStatus = async (req, res) => {
         }
       }
       await match.save();
+      // Auto-resolve any pending result request for this match
+      await LudoResultRequest.updateMany(
+        { matchId: match._id, status: 'pending' },
+        { status: 'resolved', reviewedBy: req.user._id, reviewedAt: new Date(), adminNote: 'Auto-resolved — match admin-cancelled' }
+      );
       if (io) {
         io.emit('ludo:waiting-updated');
         io.emit('ludo:match-live');
@@ -350,6 +381,11 @@ const updateLudoMatchStatus = async (req, res) => {
       match.status = 'completed';
       match.winnerId = winnerId;
       await match.save();
+      // Auto-resolve any pending result request for this match
+      await LudoResultRequest.updateMany(
+        { matchId: match._id, status: 'pending' },
+        { status: 'resolved', winnerId, reviewedBy: req.user._id, reviewedAt: new Date(), adminNote: 'Auto-resolved — match completed by admin' }
+      );
       return res.json({ message: 'Match completed. Winner credited.', match, winnerAmount, commission });
     }
 

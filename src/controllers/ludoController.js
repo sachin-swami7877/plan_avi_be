@@ -420,8 +420,9 @@ const submitWinDispute = async (req, res) => {
     let screenshotUrl;
     try {
       const compressedBuffer = await sharp(req.file.buffer)
-        .resize({ width: 1200, withoutEnlargement: true })
-        .jpeg({ quality: 70 })
+        .rotate()
+        .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
+        .jpeg({ quality: 80 })
         .toBuffer();
       screenshotUrl = await uploadFromBuffer(compressedBuffer, 'lean_aviator/ludo_results', 'image/jpeg');
     } catch (uploadErr) {
@@ -725,8 +726,9 @@ const submitResult = async (req, res) => {
     let screenshotUrl;
     try {
       const compressedBuffer = await sharp(req.file.buffer)
-        .resize({ width: 1200, withoutEnlargement: true })
-        .jpeg({ quality: 70 })
+        .rotate()
+        .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
+        .jpeg({ quality: 80 })
         .toBuffer();
       screenshotUrl = await uploadFromBuffer(
         compressedBuffer,
@@ -822,8 +824,9 @@ const submitLoss = async (req, res) => {
     let screenshotUrl;
     try {
       const compressedBuffer = await sharp(req.file.buffer)
-        .resize({ width: 1200, withoutEnlargement: true })
-        .jpeg({ quality: 70 })
+        .rotate()
+        .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
+        .jpeg({ quality: 80 })
         .toBuffer();
       screenshotUrl = await uploadFromBuffer(compressedBuffer, 'lean_aviator/ludo_results', 'image/jpeg');
     } catch (uploadErr) {
