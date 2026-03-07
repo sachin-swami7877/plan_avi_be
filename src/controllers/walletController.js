@@ -74,14 +74,23 @@ const createDepositRequest = async (req, res) => {
     let screenshotUrl = null;
     if (req.file && req.file.buffer) {
       try {
-        const compressedBuffer = await sharp(req.file.buffer)
-          .resize({ width: 1200, withoutEnlargement: true })
-          .jpeg({ quality: 50 })
-          .toBuffer();
+        let bufferToUpload;
+        let mime = 'image/jpeg';
+        try {
+          bufferToUpload = await sharp(req.file.buffer, { failOn: 'none' })
+            .rotate()
+            .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
+            .jpeg({ quality: 50 })
+            .toBuffer();
+        } catch (sharpErr) {
+          console.error('Sharp processing failed, uploading raw:', sharpErr.message);
+          bufferToUpload = req.file.buffer;
+          mime = req.file.mimetype || 'image/jpeg';
+        }
         screenshotUrl = await uploadFromBuffer(
-          compressedBuffer,
+          bufferToUpload,
           'lean_aviator/deposits',
-          'image/jpeg'
+          mime
         );
       } catch (uploadErr) {
         console.error('Cloudinary upload error:', uploadErr);

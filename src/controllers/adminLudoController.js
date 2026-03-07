@@ -410,8 +410,8 @@ const bulkDeleteLudoMatches = async (req, res) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ message: 'No match IDs provided' });
     }
-    // Only allow deleting cancelled matches
-    const result = await LudoMatch.deleteMany({ _id: { $in: ids }, status: 'cancelled' });
+    // Only allow deleting completed or cancelled matches
+    const result = await LudoMatch.deleteMany({ _id: { $in: ids }, status: { $in: ['cancelled', 'completed'] } });
     // Also clean up any result requests for these matches
     await LudoResultRequest.deleteMany({ matchId: { $in: ids } });
     res.json({ message: `${result.deletedCount} matches deleted` });

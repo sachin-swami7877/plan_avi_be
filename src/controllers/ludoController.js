@@ -419,12 +419,7 @@ const submitWinDispute = async (req, res) => {
 
     let screenshotUrl;
     try {
-      const compressedBuffer = await sharp(req.file.buffer)
-        .rotate()
-        .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      screenshotUrl = await uploadFromBuffer(compressedBuffer, 'lean_aviator/ludo_results', 'image/jpeg');
+      screenshotUrl = await uploadFromBuffer(req.file.buffer, 'lean_aviator/ludo_results', req.file.mimetype || 'image/jpeg');
     } catch (uploadErr) {
       console.error(uploadErr);
       return res.status(500).json({ message: 'Failed to upload screenshot' });
@@ -700,41 +695,37 @@ const getMatchDetail = async (req, res) => {
 const submitResult = async (req, res) => {
   try {
     const { matchId } = req.body;
+    console.log('[submitResult] matchId:', matchId, '| user:', req.user?.name, '| file:', req.file?.originalname, req.file?.size, 'bytes');
     if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
     if (!req.file || !req.file.buffer) {
+      console.log('[submitResult] FAIL: no file attached');
       return res.status(400).json({ message: 'Screenshot is required' });
     }
 
     const match = await LudoMatch.findById(matchId);
-    if (!match) return res.status(404).json({ message: 'Match not found' });
+    if (!match) { console.log('[submitResult] FAIL: match not found'); return res.status(404).json({ message: 'Match not found' }); }
 
     const userId = req.user._id.toString();
     const isPlayer = match.players.some((p) => p.userId.toString() === userId);
-    if (!isPlayer) return res.status(403).json({ message: 'You are not in this match' });
+    if (!isPlayer) { console.log('[submitResult] FAIL: not a player'); return res.status(403).json({ message: 'You are not in this match' }); }
     if (match.status !== 'live') {
+      console.log('[submitResult] FAIL: match status is', match.status);
       return res.status(400).json({ message: 'Result can only be submitted for live matches' });
     }
 
     let request = await LudoResultRequest.findOne({ matchId: match._id });
     if (request && request.claims.some((c) => c.userId.toString() === userId)) {
+      console.log('[submitResult] FAIL: user already submitted claim');
       return res.status(400).json({ message: 'You have already submitted a claim for this match.' });
     }
     if (request && request.status === 'resolved') {
+      console.log('[submitResult] FAIL: request already resolved');
       return res.status(400).json({ message: 'This match result is already resolved.' });
     }
 
     let screenshotUrl;
     try {
-      const compressedBuffer = await sharp(req.file.buffer)
-        .rotate()
-        .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      screenshotUrl = await uploadFromBuffer(
-        compressedBuffer,
-        'lean_aviator/ludo_results',
-        'image/jpeg'
-      );
+      screenshotUrl = await uploadFromBuffer(req.file.buffer, 'lean_aviator/ludo_results', req.file.mimetype || 'image/jpeg');
     } catch (uploadErr) {
       console.error(uploadErr);
       return res.status(500).json({ message: 'Failed to upload screenshot' });
@@ -783,12 +774,13 @@ const submitResult = async (req, res) => {
       { type: 'ludo_result' }
     );
 
+    console.log('[submitResult] SUCCESS: requestId:', request._id, '| matchId:', matchId, '| user:', req.user?.name);
     res.status(201).json({
       message: 'Result submitted. Admin will verify and approve.',
       request: { _id: request._id, status: request.status },
     });
   } catch (error) {
-    console.error(error);
+    console.error('[submitResult] ERROR:', error.message, error.stack);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -798,18 +790,21 @@ const submitResult = async (req, res) => {
 const submitLoss = async (req, res) => {
   try {
     const { matchId } = req.body;
+    console.log('[submitLoss] matchId:', matchId, '| user:', req.user?.name, '| file:', req.file?.originalname, req.file?.size, 'bytes');
     if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
     if (!req.file || !req.file.buffer) {
+      console.log('[submitLoss] FAIL: no file attached');
       return res.status(400).json({ message: 'Screenshot is required' });
     }
 
     const match = await LudoMatch.findById(matchId);
-    if (!match) return res.status(404).json({ message: 'Match not found' });
+    if (!match) { console.log('[submitLoss] FAIL: match not found'); return res.status(404).json({ message: 'Match not found' }); }
 
     const userId = req.user._id.toString();
     const isPlayer = match.players.some((p) => p.userId.toString() === userId);
-    if (!isPlayer) return res.status(403).json({ message: 'You are not in this match' });
+    if (!isPlayer) { console.log('[submitLoss] FAIL: not a player'); return res.status(403).json({ message: 'You are not in this match' }); }
     if (match.status !== 'live') {
+      console.log('[submitLoss] FAIL: match status is', match.status);
       return res.status(400).json({ message: 'Match is not live' });
     }
 
@@ -823,12 +818,7 @@ const submitLoss = async (req, res) => {
 
     let screenshotUrl;
     try {
-      const compressedBuffer = await sharp(req.file.buffer)
-        .rotate()
-        .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      screenshotUrl = await uploadFromBuffer(compressedBuffer, 'lean_aviator/ludo_results', 'image/jpeg');
+      screenshotUrl = await uploadFromBuffer(req.file.buffer, 'lean_aviator/ludo_results', req.file.mimetype || 'image/jpeg');
     } catch (uploadErr) {
       console.error(uploadErr);
       return res.status(500).json({ message: 'Failed to upload screenshot' });
@@ -866,9 +856,10 @@ const submitLoss = async (req, res) => {
       });
     }
 
+    console.log('[submitLoss] SUCCESS: requestId:', request._id, '| matchId:', matchId, '| user:', req.user?.name);
     res.json({ message: 'Loss submitted. Admin will decide winner.', request: { _id: request._id } });
   } catch (error) {
-    console.error(error);
+    console.error('[submitLoss] ERROR:', error.message, error.stack);
     res.status(500).json({ message: 'Server error' });
   }
 };
