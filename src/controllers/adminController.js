@@ -135,7 +135,7 @@ const getDashboardStats = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { period, search, from: fromStr, to: toStr, status, page = 1, limit = 50 } = req.query;
+    const { period, search, from: fromStr, to: toStr, status, page = 1, limit = 50, sortBy, balanceMin, balanceMax } = req.query;
     let filter = {};
     if (fromStr && toStr) {
       const fromDate = new Date(fromStr);
@@ -166,14 +166,30 @@ const getUsers = async (req, res) => {
         { phone: regex },
       ];
     }
+    // Balance range filter
+    if (balanceMin !== undefined || balanceMax !== undefined) {
+      filter.walletBalance = {};
+      if (balanceMin !== undefined) filter.walletBalance.$gte = Number(balanceMin);
+      if (balanceMax !== undefined) filter.walletBalance.$lte = Number(balanceMax);
+    }
+
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
 
+    // Sort options
+    const sort = (sortBy || '').trim();
+    let sortQuery = { createdAt: -1 };
+    if (sort === 'topBalance') sortQuery = { walletBalance: -1, _id: 1 };
+    else if (sort === 'topEarnings') sortQuery = { earningsBalance: -1, _id: 1 };
+    else if (sort === 'topWithdrawable') sortQuery = { earningsBalance: -1, _id: 1 };
+    else if (sort === 'topDeposited') sortQuery = { totalDeposited: -1, _id: 1 };
+
     const [users, totalCount] = await Promise.all([
-      User.find(filter).select('-otp -otpExpiry').sort({ createdAt: -1 }).skip(skip).limit(limitNum),
+      User.find(filter).select('-otp -otpExpiry').sort(sortQuery).skip(skip).limit(limitNum).lean(),
       User.countDocuments(filter),
     ]);
+
     res.json({ users, totalCount, page: pageNum, totalPages: Math.ceil(totalCount / limitNum) });
   } catch (error) {
     console.error(error);
@@ -400,25 +416,68 @@ const deleteUser = async (req, res) => {
 
 const getWalletRequests = async (req, res) => {
   try {
-    const { status, type, page = 1, limit = 25 } = req.query;
+    const { status, type, page = 1, limit = 25, from: fromStr, to: toStr, datePreset } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (type) filter.type = type;
+
+    // Date filtering
+    if (fromStr && toStr) {
+      const fromDate = new Date(fromStr);
+      const toDate = new Date(toStr);
+      toDate.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: fromDate, $lte: toDate };
+    } else if (datePreset) {
+      const now = new Date();
+      if (datePreset === 'today') {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        filter.createdAt = { $gte: start };
+      } else if (datePreset === 'last5') {
+        const start = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+        filter.createdAt = { $gte: start };
+      }
+    }
 
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
 
-    const [requests, totalCount] = await Promise.all([
+    // Build totals filter independently (not from filter) — no status, just type + date
+    const totalsFilter = {};
+    if (type) totalsFilter.type = type;
+    if (filter.createdAt) {
+      totalsFilter.createdAt = {};
+      if (filter.createdAt.$gte) totalsFilter.createdAt.$gte = new Date(filter.createdAt.$gte);
+      if (filter.createdAt.$lte) totalsFilter.createdAt.$lte = new Date(filter.createdAt.$lte);
+    }
+
+    const [requests, totalCount, totalAgg] = await Promise.all([
       WalletRequest.find(filter)
-        .populate('userId', 'name email phone walletBalance upiId upiNumber')
+        .populate('userId', 'name email phone walletBalance upiId upiNumber bankAccountNumber bankIfscCode bankAccountHolder')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum),
       WalletRequest.countDocuments(filter),
+      WalletRequest.aggregate([
+        { $match: totalsFilter },
+        { $group: { _id: '$type', totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } },
+      ]),
     ]);
 
-    res.json({ data: requests, totalCount, page: pageNum, totalPages: Math.ceil(totalCount / limitNum) });
+    // Build totals map
+    const totals = {};
+    for (const t of totalAgg) {
+      totals[t._id] = { totalAmount: t.totalAmount, count: t.count };
+    }
+
+    res.json({
+      data: requests,
+      totalCount,
+      page: pageNum,
+      totalPages: Math.ceil(totalCount / limitNum),
+      depositTotals: totals.deposit || { totalAmount: 0, count: 0 },
+      withdrawalTotals: totals.withdrawal || { totalAmount: 0, count: 0 },
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

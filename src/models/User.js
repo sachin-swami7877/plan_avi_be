@@ -27,6 +27,21 @@ const userSchema = new mongoose.Schema({
     default: null,
     trim: true
   },
+  bankAccountNumber: {
+    type: String,
+    default: null,
+    trim: true
+  },
+  bankIfscCode: {
+    type: String,
+    default: null,
+    trim: true
+  },
+  bankAccountHolder: {
+    type: String,
+    default: null,
+    trim: true
+  },
   walletBalance: {
     type: Number,
     default: 0

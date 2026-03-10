@@ -352,11 +352,14 @@ const updateProfile = async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const { name, phone, upiId, upiNumber } = req.body;
+    const { name, phone, upiId, upiNumber, bankAccountNumber, bankIfscCode, bankAccountHolder } = req.body;
     if (name !== undefined) user.name = String(name).trim();
     if (phone !== undefined) user.phone = String(phone).trim() || null;
     if (upiId !== undefined) user.upiId = String(upiId).trim() || null;
     if (upiNumber !== undefined) user.upiNumber = String(upiNumber).trim() || null;
+    if (bankAccountNumber !== undefined) user.bankAccountNumber = String(bankAccountNumber).trim() || null;
+    if (bankIfscCode !== undefined) user.bankIfscCode = String(bankIfscCode).trim().toUpperCase() || null;
+    if (bankAccountHolder !== undefined) user.bankAccountHolder = String(bankAccountHolder).trim() || null;
 
     await user.save();
 
@@ -367,6 +370,9 @@ const updateProfile = async (req, res) => {
       phone: user.phone,
       upiId: user.upiId,
       upiNumber: user.upiNumber,
+      bankAccountNumber: user.bankAccountNumber,
+      bankIfscCode: user.bankIfscCode,
+      bankAccountHolder: user.bankAccountHolder,
       walletBalance: user.walletBalance,
       isAdmin: user.isAdmin,
       status: user.status,
