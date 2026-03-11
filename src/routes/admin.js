@@ -15,6 +15,7 @@ const {
   processWalletRequest,
   getAllBets,
   deleteBets,
+  bulkClearBets,
   getWinningBets,
   getAdminNotifications,
   forceCrashBet,
@@ -73,6 +74,7 @@ router.get('/wallet-requests', getWalletRequests);
 router.put('/wallet-requests/:id', processWalletRequest);
 router.get('/bets', getAllBets);
 router.post('/bets/delete', fullAdminOnly, deleteBets);
+router.post('/bets/bulk-clear', fullAdminOnly, bulkClearBets);
 router.get('/bets/live', getLiveBets);
 router.post('/bets/:id/force-crash', forceCrashBet);
 router.get('/game/current-round', getCurrentRoundWithBets);

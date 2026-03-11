@@ -135,8 +135,15 @@ const getDashboardStats = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { period, search, from: fromStr, to: toStr, status, page = 1, limit = 50, sortBy, balanceMin, balanceMax } = req.query;
+    const { period, search, from: fromStr, to: toStr, status, page = 1, limit = 50, sortBy, balanceMin, balanceMax, userIds } = req.query;
     let filter = {};
+    // Filter by specific user IDs (for online users tab)
+    if (userIds) {
+      const ids = userIds.split(',').filter(Boolean);
+      if (ids.length > 0) {
+        filter._id = { $in: ids };
+      }
+    }
     if (fromStr && toStr) {
       const fromDate = new Date(fromStr);
       const toDate = new Date(toStr);
@@ -638,6 +645,31 @@ const deleteBets = async (req, res) => {
       return res.status(400).json({ message: 'Provide an array of bet IDs' });
     }
     const result = await Bet.deleteMany({ _id: { $in: ids } });
+    res.json({ message: `Deleted ${result.deletedCount} bets`, deletedCount: result.deletedCount });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const bulkClearBets = async (req, res) => {
+  try {
+    const { from, to, status } = req.body;
+    if (!from || !to) return res.status(400).json({ message: 'Date range (from, to) is required' });
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    toDate.setHours(23, 59, 59, 999);
+
+    const filter = { createdAt: { $gte: fromDate, $lte: toDate } };
+    if (status === 'won') filter.status = 'won';
+    else if (status === 'lost') filter.status = 'lost';
+    // 'all' means no status filter
+
+    const count = await Bet.countDocuments(filter);
+    if (count === 0) return res.json({ message: 'No bets found for the given criteria', deletedCount: 0 });
+
+    const result = await Bet.deleteMany(filter);
     res.json({ message: `Deleted ${result.deletedCount} bets`, deletedCount: result.deletedCount });
   } catch (error) {
     console.error(error);
@@ -1301,6 +1333,7 @@ module.exports = {
   processWalletRequest,
   getAllBets,
   deleteBets,
+  bulkClearBets,
   getWinningBets,
   getAdminNotifications,
   forceCrashBet,

@@ -792,10 +792,6 @@ const submitLoss = async (req, res) => {
     const { matchId } = req.body;
     console.log('[submitLoss] matchId:', matchId, '| user:', req.user?.name, '| file:', req.file?.originalname, req.file?.size, 'bytes');
     if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
-    if (!req.file || !req.file.buffer) {
-      console.log('[submitLoss] FAIL: no file attached');
-      return res.status(400).json({ message: 'Screenshot is required' });
-    }
 
     const match = await LudoMatch.findById(matchId);
     if (!match) { console.log('[submitLoss] FAIL: match not found'); return res.status(404).json({ message: 'Match not found' }); }
@@ -816,12 +812,14 @@ const submitLoss = async (req, res) => {
       return res.status(400).json({ message: 'This match result is already resolved.' });
     }
 
-    let screenshotUrl;
-    try {
-      screenshotUrl = await uploadFromBuffer(req.file.buffer, 'lean_aviator/ludo_results', req.file.mimetype || 'image/jpeg');
-    } catch (uploadErr) {
-      console.error(uploadErr);
-      return res.status(500).json({ message: 'Failed to upload screenshot' });
+    let screenshotUrl = null;
+    if (req.file && req.file.buffer) {
+      try {
+        screenshotUrl = await uploadFromBuffer(req.file.buffer, 'lean_aviator/ludo_results', req.file.mimetype || 'image/jpeg');
+      } catch (uploadErr) {
+        console.error(uploadErr);
+        // Screenshot upload failed but loss can still proceed without it
+      }
     }
 
     const claim = {

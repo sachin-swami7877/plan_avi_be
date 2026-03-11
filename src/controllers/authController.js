@@ -321,6 +321,8 @@ const setUsername = async (req, res) => {
   try {
     const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
     if (!name) return res.status(400).json({ message: 'Name is required' });
+    if (name.length < 3) return res.status(400).json({ message: 'Name must be at least 3 characters' });
+    if (/^[\.\-\s]+$/.test(name)) return res.status(400).json({ message: 'Please enter a valid name' });
 
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -353,7 +355,12 @@ const updateProfile = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     const { name, phone, upiId, upiNumber, bankAccountNumber, bankIfscCode, bankAccountHolder } = req.body;
-    if (name !== undefined) user.name = String(name).trim();
+    if (name !== undefined) {
+      const trimmedName = String(name).trim();
+      if (trimmedName.length < 3) return res.status(400).json({ message: 'Name must be at least 3 characters' });
+      if (/^[\.\-\s]+$/.test(trimmedName)) return res.status(400).json({ message: 'Please enter a valid name' });
+      user.name = trimmedName;
+    }
     if (phone !== undefined) user.phone = String(phone).trim() || null;
     if (upiId !== undefined) user.upiId = String(upiId).trim() || null;
     if (upiNumber !== undefined) user.upiNumber = String(upiNumber).trim() || null;

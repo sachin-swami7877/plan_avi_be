@@ -282,6 +282,44 @@ class GameEngine {
       return;
     }
 
+    // ── AUTO-CRASH: High bet protection ──
+    if (hasRealBets) {
+      const maxBetAmount = Math.max(...bets.map((b) => b.amount));
+
+      // ₹1000+ → 92% at 1x, 4% at 1.3x, 2% at 1.5x, 2% at 1.7x
+      if (maxBetAmount >= 1000) {
+        const r = Math.random();
+        let cp;
+        if (r < 0.92) cp = 1.00;
+        else if (r < 0.96) cp = 1.30;
+        else if (r < 0.98) cp = 1.50;
+        else cp = 1.70;
+        this.currentRound.crashMultiplier = cp;
+        await this.currentRound.save();
+        console.log(`🚨 High bet ₹${maxBetAmount} (>=1000) → crash at ${cp}x`);
+        return;
+      }
+
+      // ₹500–999 → 80% at 1x, 10% at 1.0–1.3x, 5% at 1.3–1.4x, 5% at 1.4–1.7x
+      if (maxBetAmount >= 500) {
+        const r = Math.random();
+        let cp;
+        if (r < 0.80) {
+          cp = 1.00;
+        } else if (r < 0.90) {
+          cp = Number((1.0 + Math.random() * 0.30).toFixed(2));
+        } else if (r < 0.95) {
+          cp = Number((1.30 + Math.random() * 0.10).toFixed(2));
+        } else {
+          cp = Number((1.40 + Math.random() * 0.30).toFixed(2));
+        }
+        this.currentRound.crashMultiplier = cp;
+        await this.currentRound.save();
+        console.log(`🚨 Mid-high bet ₹${maxBetAmount} (500-999) → crash at ${cp}x`);
+        return;
+      }
+    }
+
     let crashPoint;
 
     // ── RULE 0: No real bets → cosmetic round (balanced distribution) ──
