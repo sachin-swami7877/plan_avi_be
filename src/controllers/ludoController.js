@@ -239,11 +239,12 @@ const CANCEL_REASON_LABELS = {
 
 // Win dispute reason labels
 const WIN_REASON_LABELS = {
-  i_clearly_won: 'मैंने Clearly Game जीता है',
-  opponent_left_mid_game: 'Opponent ने बीच में Game छोड़ दिया',
-  have_proof: 'मेरे पास Screenshot Proof है',
-  unfair_cancel: 'Cancel Request अनुचित था',
-  other: 'अन्य कारण',
+  i_won_clearly: 'I Won the Game',
+  i_clearly_won: 'I Won the Game',
+  opponent_left_mid_game: 'Opponent left mid game',
+  have_proof: 'I have screenshot proof',
+  unfair_cancel: 'Cancel request was unfair',
+  other: 'Other Reason',
 };
 
 // @desc    Request cancel after game has started — saves reason, notifies opponent
@@ -785,6 +786,103 @@ const submitResult = async (req, res) => {
   }
 };
 
+// @desc    Submit result with base64 screenshot (fallback when multipart upload fails)
+// @route   POST /api/ludo/submit-result-base64
+const submitResultBase64 = async (req, res) => {
+  try {
+    const { matchId, winReasonCode, winReasonCustom, screenshotBase64 } = req.body;
+    if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
+    if (!screenshotBase64) return res.status(400).json({ message: 'Screenshot is required' });
+
+    const match = await LudoMatch.findById(matchId);
+    if (!match) return res.status(404).json({ message: 'Match not found' });
+
+    const userId = req.user._id.toString();
+    const isPlayer = match.players.some((p) => p.userId.toString() === userId);
+    if (!isPlayer) return res.status(403).json({ message: 'You are not in this match' });
+    if (match.status !== 'live') {
+      return res.status(400).json({ message: 'Result can only be submitted for live matches' });
+    }
+
+    let request = await LudoResultRequest.findOne({ matchId: match._id });
+    if (request && request.claims.some((c) => c.userId.toString() === userId)) {
+      return res.status(400).json({ message: 'You have already submitted a claim for this match.' });
+    }
+    if (request && request.status === 'resolved') {
+      return res.status(400).json({ message: 'This match result is already resolved.' });
+    }
+
+    let screenshotUrl;
+    try {
+      // screenshotBase64 is already a data URI like "data:image/jpeg;base64,..."
+      const result = await new Promise((resolve, reject) => {
+        require('../config/cloudinary').cloudinary.uploader.upload(screenshotBase64, {
+          folder: 'lean_aviator/ludo_results',
+          resource_type: 'image',
+        }, (err, result) => {
+          if (err) return reject(err);
+          resolve(result);
+        });
+      });
+      screenshotUrl = result.secure_url;
+    } catch (uploadErr) {
+      console.error('[submitResultBase64] Cloudinary also failed, storing base64 directly');
+      // Store base64 directly as last resort
+      screenshotUrl = screenshotBase64;
+    }
+
+    const claim = {
+      userId: req.user._id,
+      userName: req.user.name,
+      type: 'win',
+      screenshotUrl,
+      winReasonCode: winReasonCode || null,
+      winReasonCustom: winReasonCode === 'other' ? (winReasonCustom || null) : null,
+      createdAt: new Date(),
+    };
+
+    if (!request) {
+      request = await LudoResultRequest.create({
+        matchId: match._id,
+        claims: [claim],
+        status: 'pending',
+      });
+    } else {
+      request.claims.push(claim);
+      await request.save();
+    }
+
+    const io = req.app.get('io');
+    io.to('admins').emit('admin:ludo-result-request', {
+      requestId: request._id,
+      matchId: match._id,
+      userName: req.user.name,
+    });
+
+    await Notification.create({
+      userId: req.user._id,
+      title: 'Result Submitted',
+      message: 'Your Ludo match result has been submitted for admin approval.',
+      type: 'game',
+    });
+
+    sendPushToAdmins(
+      'Ludo Result Submitted',
+      `${req.user.name} ne Rs.${match.entryAmount} match ka result submit kiya`,
+      { type: 'ludo_result' }
+    );
+
+    console.log('[submitResultBase64] SUCCESS: requestId:', request._id, '| matchId:', matchId, '| user:', req.user?.name);
+    res.status(201).json({
+      message: 'Result submitted. Admin will verify and approve.',
+      request: { _id: request._id, status: request.status },
+    });
+  } catch (error) {
+    console.error('[submitResultBase64] ERROR:', error.message, error.stack);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 // @desc    Submit "I lost" - add loss claim to same request (screenshot required)
 // @route   POST /api/ludo/submit-loss
 const submitLoss = async (req, res) => {
@@ -1091,6 +1189,7 @@ module.exports = {
   getMyMatches,
   getMatchDetail,
   submitResult,
+  submitResultBase64,
   submitLoss,
   cancelAsLoss,
   getLudoSettings,

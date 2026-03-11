@@ -13,6 +13,7 @@ const {
   getMyMatches,
   getMatchDetail,
   submitResult,
+  submitResultBase64,
   submitLoss,
   cancelAsLoss,
   getLudoSettings,
@@ -37,6 +38,7 @@ router.get('/settings', getLudoSettings);
 router.get('/my-matches', getMyMatches);
 router.get('/match/:id', getMatchDetail);
 router.post('/submit-result', upload.single('screenshot'), submitResult);
+router.post('/submit-result-base64', submitResultBase64);
 router.post('/submit-loss', upload.single('screenshot'), submitLoss);
 router.post('/cancel-as-loss', cancelAsLoss);
 router.get('/waiting-list', getWaitingList);
