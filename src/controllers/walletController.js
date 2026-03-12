@@ -321,6 +321,55 @@ const getWalletTransactions = async (req, res) => {
   }
 };
 
+// @desc    Cancel a pending wallet request (user-initiated)
+// @route   POST /api/wallet/cancel/:id
+const cancelWalletRequest = async (req, res) => {
+  try {
+    const request = await WalletRequest.findById(req.params.id);
+    if (!request) return res.status(404).json({ message: 'Request not found' });
+    if (request.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not your request' });
+    }
+    if (request.status !== 'pending') {
+      return res.status(400).json({ message: 'Only pending requests can be cancelled' });
+    }
+
+    request.status = 'rejected';
+    request.processedAt = new Date();
+    await request.save();
+
+    // If withdrawal, refund the amount back to user
+    if (request.type === 'withdrawal') {
+      const user = await User.findById(req.user._id);
+      const balBefore = user.walletBalance;
+      user.creditEarnings(request.amount);
+      await user.save();
+      const newBalance = user.walletBalance;
+
+      await recordWalletTx(
+        user._id, 'credit', 'withdrawal_cancelled', request.amount,
+        `Withdrawal of ₹${request.amount} cancelled by user — refunded`,
+        balBefore, newBalance, request._id
+      );
+
+      // Notify admin
+      const io = req.app.get('io');
+      if (io) io.to('admins').emit('admin:wallet-request', { type: 'cancelled' });
+
+      return res.json({ message: 'Withdrawal cancelled. Amount refunded.', newBalance });
+    }
+
+    // Deposit cancel — no refund needed (money not credited yet)
+    const io = req.app.get('io');
+    if (io) io.to('admins').emit('admin:wallet-request', { type: 'cancelled' });
+
+    res.json({ message: 'Deposit request cancelled.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getPaymentInfo,
   getBalance,
@@ -329,4 +378,5 @@ module.exports = {
   getWithdrawalInfo,
   getWalletHistory,
   getWalletTransactions,
+  cancelWalletRequest,
 };

@@ -545,6 +545,12 @@ const processWalletRequest = async (req, res) => {
         user.creditEarnings(walletRequest.amount);
       }
       walletRequest.status = 'rejected';
+    } else if (action === 'reject_deduct') {
+      // Reject withdrawal WITHOUT refund — amount is permanently deducted
+      if (walletRequest.type !== 'withdrawal') {
+        return res.status(400).json({ message: 'Reject & Deduct is only for withdrawal requests' });
+      }
+      walletRequest.status = 'rejected';
     } else {
       return res.status(400).json({ message: 'Invalid action' });
     }
@@ -567,6 +573,15 @@ const processWalletRequest = async (req, res) => {
           balBefore, newBalance, walletRequest._id
         );
       }
+    }
+
+    // Record deduction for reject_deduct (balance unchanged but needs audit trail)
+    if (action === 'reject_deduct') {
+      await recordWalletTx(
+        user._id, 'debit', 'withdrawal_deducted', walletRequest.amount,
+        `Withdrawal of ₹${walletRequest.amount} rejected — amount deducted (no refund)`,
+        balBefore, newBalance, walletRequest._id
+      );
     }
 
     walletRequest.processedBy = req.user._id;
@@ -1350,22 +1365,27 @@ const exportUsers = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    const rows = users.map((u, i) => ({
-      'S.No': i + 1,
-      'Name': u.name || '—',
-      'Phone': u.phone || '—',
-      'Email': u.email || '—',
-      'UPI ID': u.upiId || '—',
-      'UPI Number': u.upiNumber || '—',
-      'Bank Account': u.bankAccountNumber || '—',
-      'IFSC': u.bankIfscCode || '—',
-      'Account Holder': u.bankAccountHolder || '—',
-      'Balance': u.walletBalance || 0,
-      'Status': u.status || 'active',
-      'Joined': u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-IN') : '—',
-    }));
+    let totalBalance = 0;
+    const rows = users.map((u, i) => {
+      const bal = u.walletBalance || 0;
+      totalBalance += bal;
+      return {
+        'S.No': i + 1,
+        'Name': u.name || '—',
+        'Phone': u.phone || '—',
+        'Email': u.email || '—',
+        'UPI ID': u.upiId || '—',
+        'UPI Number': u.upiNumber || '—',
+        'Bank Account': u.bankAccountNumber || '—',
+        'IFSC': u.bankIfscCode || '—',
+        'Account Holder': u.bankAccountHolder || '—',
+        'Balance': bal,
+        'Status': u.status || 'active',
+        'Joined': u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-IN') : '—',
+      };
+    });
 
-    res.json({ users: rows, total: rows.length });
+    res.json({ users: rows, total: rows.length, totalBalance });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

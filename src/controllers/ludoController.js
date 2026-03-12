@@ -761,6 +761,15 @@ const submitResult = async (req, res) => {
       userName: req.user.name,
     });
 
+    // Notify the opponent that this user submitted a win claim
+    const otherPlayer = match.players.find((p) => p.userId.toString() !== userId);
+    if (otherPlayer && io) {
+      io.to(`user_${otherPlayer.userId}`).emit('ludo:win-claimed', {
+        matchId: match._id.toString(),
+        claimerName: req.user.name,
+      });
+    }
+
     await Notification.create({
       userId: req.user._id,
       title: 'Result Submitted',
@@ -858,6 +867,15 @@ const submitResultBase64 = async (req, res) => {
       matchId: match._id,
       userName: req.user.name,
     });
+
+    // Notify the opponent that this user submitted a win claim
+    const otherPlayer = match.players.find((p) => p.userId.toString() !== userId);
+    if (otherPlayer && io) {
+      io.to(`user_${otherPlayer.userId}`).emit('ludo:win-claimed', {
+        matchId: match._id.toString(),
+        claimerName: req.user.name,
+      });
+    }
 
     await Notification.create({
       userId: req.user._id,

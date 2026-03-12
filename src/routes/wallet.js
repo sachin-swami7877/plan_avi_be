@@ -8,6 +8,7 @@ const {
   getWithdrawalInfo,
   getWalletHistory,
   getWalletTransactions,
+  cancelWalletRequest,
 } = require('../controllers/walletController');
 const { protect } = require('../middleware/auth');
 const upload = require('../middleware/upload');
@@ -19,5 +20,6 @@ router.post('/withdraw', protect, createWithdrawalRequest);
 router.get('/withdrawal-info', protect, getWithdrawalInfo);
 router.get('/history', protect, getWalletHistory);
 router.get('/transactions', protect, getWalletTransactions);
+router.post('/cancel/:id', protect, cancelWalletRequest);
 
 module.exports = router;
