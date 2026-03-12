@@ -35,6 +35,12 @@ const {
   uploadQrCode,
   getBonusRecords,
   getPendingCounts,
+  getLudoProfit,
+  getAviatorProfit,
+  cleanupPhotos,
+  cleanupLudoMatches,
+  getCleanupPreview,
+  exportUsers,
 } = require('../controllers/adminController');
 const {
   getAllLudoMatches,
@@ -93,6 +99,18 @@ router.get('/settings', fullAdminOnly, getSettings);
 router.put('/settings', fullAdminOnly, updateSettings);
 router.post('/settings/qr', fullAdminOnly, upload.single('qrCode'), uploadQrCode);
 router.get('/bonus-records', getBonusRecords);
+
+// Export
+router.get('/export/users', fullAdminOnly, exportUsers);
+
+// Profit
+router.get('/profit/ludo', fullAdminOnly, getLudoProfit);
+router.get('/profit/aviator', fullAdminOnly, getAviatorProfit);
+
+// Database cleanup
+router.get('/cleanup/preview', fullAdminOnly, getCleanupPreview);
+router.post('/cleanup/photos', fullAdminOnly, cleanupPhotos);
+router.post('/cleanup/ludo-matches', fullAdminOnly, cleanupLudoMatches);
 
 // Ludo (separate section)
 router.get('/ludo/matches', getAllLudoMatches);

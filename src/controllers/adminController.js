@@ -1341,6 +1341,308 @@ const getPendingCounts = async (req, res) => {
   }
 };
 
+// ──────────────────────── EXPORT USERS ────────────────────────
+
+const exportUsers = async (req, res) => {
+  try {
+    const users = await User.find({ role: 'user' })
+      .select('name phone email upiId upiNumber bankAccountNumber bankIfscCode bankAccountHolder walletBalance status createdAt')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const rows = users.map((u, i) => ({
+      'S.No': i + 1,
+      'Name': u.name || '—',
+      'Phone': u.phone || '—',
+      'Email': u.email || '—',
+      'UPI ID': u.upiId || '—',
+      'UPI Number': u.upiNumber || '—',
+      'Bank Account': u.bankAccountNumber || '—',
+      'IFSC': u.bankIfscCode || '—',
+      'Account Holder': u.bankAccountHolder || '—',
+      'Balance': u.walletBalance || 0,
+      'Status': u.status || 'active',
+      'Joined': u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-IN') : '—',
+    }));
+
+    res.json({ users: rows, total: rows.length });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// ──────────────────────── PROFIT PAGE ────────────────────────
+
+const getLudoProfit = async (req, res) => {
+  try {
+    const { page = 1, limit = 50, startDate, endDate } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = { status: 'completed', winnerId: { $ne: null } };
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) { const s = new Date(startDate); if (!isNaN(s)) { s.setUTCHours(0,0,0,0); filter.createdAt.$gte = s; } }
+      if (endDate) { const e = new Date(endDate); if (!isNaN(e)) { e.setUTCHours(23,59,59,999); filter.createdAt.$lte = e; } }
+      if (!Object.keys(filter.createdAt).length) delete filter.createdAt;
+    }
+
+    const [matches, total] = await Promise.all([
+      LudoMatch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      LudoMatch.countDocuments(filter),
+    ]);
+
+    // Calculate commission for each match
+    const { calcLudoCommission } = require('../utils/ludoCommission');
+    let totalProfit = 0;
+    const rows = await Promise.all(matches.map(async (m) => {
+      const pool = m.players.reduce((s, p) => s + (p.amountPaid || 0), 0);
+      const { commission, winnerAmount } = await calcLudoCommission(pool, m.entryAmount);
+      totalProfit += commission;
+      const winner = m.players.find(p => p.userId?.toString() === m.winnerId?.toString());
+      const loser = m.players.find(p => p.userId?.toString() !== m.winnerId?.toString());
+      return {
+        _id: m._id,
+        entryAmount: m.entryAmount,
+        pool,
+        prize: winnerAmount,
+        commission,
+        winnerName: winner?.userName || '—',
+        loserName: loser?.userName || '—',
+        createdAt: m.createdAt,
+      };
+    }));
+
+    res.json({ rows, total, totalPages: Math.ceil(total / limitNum), page: pageNum, totalProfit });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const getAviatorProfit = async (req, res) => {
+  try {
+    const { page = 1, limit = 50, startDate, endDate } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = { status: 'crashed' };
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) { const s = new Date(startDate); if (!isNaN(s)) { s.setUTCHours(0,0,0,0); filter.createdAt.$gte = s; } }
+      if (endDate) { const e = new Date(endDate); if (!isNaN(e)) { e.setUTCHours(23,59,59,999); filter.createdAt.$lte = e; } }
+      if (!Object.keys(filter.createdAt).length) delete filter.createdAt;
+    }
+
+    const GameRound = require('../models/GameRound');
+    const [rounds, total] = await Promise.all([
+      GameRound.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      GameRound.countDocuments(filter),
+    ]);
+
+    let totalProfit = 0;
+    const rows = rounds.map((r) => {
+      const profit = (r.totalBetAmount || 0) - (r.totalWinAmount || 0);
+      totalProfit += profit;
+      return {
+        _id: r._id,
+        roundId: r.roundId,
+        crashMultiplier: r.crashMultiplier,
+        totalBet: r.totalBetAmount || 0,
+        totalWin: r.totalWinAmount || 0,
+        profit,
+        createdAt: r.createdAt,
+      };
+    });
+
+    res.json({ rows, total, totalPages: Math.ceil(total / limitNum), page: pageNum, totalProfit });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// ──────────────────────── DATABASE CLEANUP ────────────────────────
+
+const cleanupPhotos = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    if (!startDate || !endDate) return res.status(400).json({ message: 'Start and end date required' });
+
+    const s = new Date(startDate); s.setUTCHours(0,0,0,0);
+    const e = new Date(endDate); e.setUTCHours(23,59,59,999);
+
+    const { cloudinary } = require('../config/cloudinary');
+
+    // Find ludo result requests with screenshots in date range
+    const requests = await LudoResultRequest.find({
+      createdAt: { $gte: s, $lte: e },
+      'claims.screenshotUrl': { $ne: null },
+    }).lean();
+
+    let deletedCount = 0;
+    const cloudinaryIds = [];
+
+    for (const req of requests) {
+      for (const claim of req.claims) {
+        if (claim.screenshotUrl && claim.screenshotUrl.includes('cloudinary.com')) {
+          // Extract public_id from URL: .../upload/v123/folder/filename.ext
+          const parts = claim.screenshotUrl.split('/upload/');
+          if (parts[1]) {
+            const pathWithVersion = parts[1]; // v123/folder/filename.ext
+            const pathParts = pathWithVersion.split('/');
+            pathParts.shift(); // remove version
+            const publicId = pathParts.join('/').replace(/\.[^.]+$/, ''); // remove extension
+            if (publicId) cloudinaryIds.push(publicId);
+          }
+          deletedCount++;
+        }
+      }
+    }
+
+    // Delete from Cloudinary in batches of 100
+    for (let i = 0; i < cloudinaryIds.length; i += 100) {
+      const batch = cloudinaryIds.slice(i, i + 100);
+      try { await cloudinary.api.delete_resources(batch); } catch (err) { console.error('Cloudinary batch delete error:', err.message); }
+    }
+
+    // Clear screenshot URLs from DB
+    await LudoResultRequest.updateMany(
+      { createdAt: { $gte: s, $lte: e }, 'claims.screenshotUrl': { $ne: null } },
+      { $set: { 'claims.$[].screenshotUrl': null } }
+    );
+
+    // Also clean wallet request screenshots
+    const walletReqs = await WalletRequest.find({
+      createdAt: { $gte: s, $lte: e },
+      screenshotUrl: { $ne: null },
+    }).lean();
+
+    const walletCloudinaryIds = [];
+    for (const wr of walletReqs) {
+      if (wr.screenshotUrl && wr.screenshotUrl.includes('cloudinary.com')) {
+        const parts = wr.screenshotUrl.split('/upload/');
+        if (parts[1]) {
+          const pathParts = parts[1].split('/');
+          pathParts.shift();
+          const publicId = pathParts.join('/').replace(/\.[^.]+$/, '');
+          if (publicId) walletCloudinaryIds.push(publicId);
+        }
+        deletedCount++;
+      }
+    }
+
+    for (let i = 0; i < walletCloudinaryIds.length; i += 100) {
+      const batch = walletCloudinaryIds.slice(i, i + 100);
+      try { await cloudinary.api.delete_resources(batch); } catch (err) { console.error('Cloudinary batch delete error:', err.message); }
+    }
+
+    await WalletRequest.updateMany(
+      { createdAt: { $gte: s, $lte: e }, screenshotUrl: { $ne: null } },
+      { $set: { screenshotUrl: null } }
+    );
+
+    res.json({ message: `Deleted ${deletedCount} photos from Cloudinary and cleared DB references` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const cleanupLudoMatches = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    if (!startDate || !endDate) return res.status(400).json({ message: 'Start and end date required' });
+
+    const s = new Date(startDate); s.setUTCHours(0,0,0,0);
+    const e = new Date(endDate); e.setUTCHours(23,59,59,999);
+
+    const filter = {
+      status: { $in: ['cancelled', 'waiting'] },
+      createdAt: { $gte: s, $lte: e },
+    };
+
+    // For waiting matches, only delete if expired (joinExpiryAt has passed)
+    const now = new Date();
+    const expiredWaiting = await LudoMatch.countDocuments({
+      status: 'waiting',
+      createdAt: { $gte: s, $lte: e },
+      $or: [{ joinExpiryAt: { $lte: now } }, { joinExpiryAt: null }],
+    });
+    const cancelledCount = await LudoMatch.countDocuments({
+      status: 'cancelled',
+      createdAt: { $gte: s, $lte: e },
+    });
+
+    // Delete expired waiting + cancelled matches
+    await LudoMatch.deleteMany({
+      createdAt: { $gte: s, $lte: e },
+      $or: [
+        { status: 'cancelled' },
+        { status: 'waiting', $or: [{ joinExpiryAt: { $lte: now } }, { joinExpiryAt: null }] },
+      ],
+    });
+
+    // Also delete associated result requests for these deleted matches
+    const remainingMatchIds = (await LudoMatch.find({}, '_id').lean()).map(m => m._id);
+    await LudoResultRequest.deleteMany({ matchId: { $nin: remainingMatchIds } });
+
+    res.json({
+      message: `Deleted ${expiredWaiting} expired waiting + ${cancelledCount} cancelled matches`,
+      expiredWaiting,
+      cancelledCount,
+      total: expiredWaiting + cancelledCount,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const getCleanupPreview = async (req, res) => {
+  try {
+    const { type, startDate, endDate } = req.query;
+    if (!startDate || !endDate) return res.status(400).json({ message: 'Dates required' });
+
+    const s = new Date(startDate); s.setUTCHours(0,0,0,0);
+    const e = new Date(endDate); e.setUTCHours(23,59,59,999);
+
+    if (type === 'photos') {
+      const ludoPhotos = await LudoResultRequest.countDocuments({
+        createdAt: { $gte: s, $lte: e },
+        'claims.screenshotUrl': { $ne: null },
+      });
+      const walletPhotos = await WalletRequest.countDocuments({
+        createdAt: { $gte: s, $lte: e },
+        screenshotUrl: { $ne: null },
+      });
+      return res.json({ count: ludoPhotos + walletPhotos, ludoPhotos, walletPhotos });
+    }
+
+    if (type === 'ludo') {
+      const now = new Date();
+      const expired = await LudoMatch.countDocuments({
+        status: 'waiting',
+        createdAt: { $gte: s, $lte: e },
+        $or: [{ joinExpiryAt: { $lte: now } }, { joinExpiryAt: null }],
+      });
+      const cancelled = await LudoMatch.countDocuments({
+        status: 'cancelled',
+        createdAt: { $gte: s, $lte: e },
+      });
+      return res.json({ count: expired + cancelled, expired, cancelled });
+    }
+
+    res.status(400).json({ message: 'Invalid type' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getPendingCounts,
@@ -1381,4 +1683,10 @@ module.exports = {
   getPublicLayout,
   getPublicUserWarning,
   getPublicLandingStats,
+  getLudoProfit,
+  getAviatorProfit,
+  cleanupPhotos,
+  cleanupLudoMatches,
+  getCleanupPreview,
+  exportUsers,
 };
