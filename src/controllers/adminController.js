@@ -376,6 +376,28 @@ const updateUserStatus = async (req, res) => {
       { new: true, runValidators: false }
     );
 
+    // If blocked, force-logout the user via socket and disconnect their connections
+    if (status === 'blocked') {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`user_${id}`).emit('force-logout', { reason: 'Your account has been blocked' });
+        // Disconnect all sockets for this user
+        const room = io.sockets.adapter.rooms.get(`user_${id}`);
+        if (room) {
+          for (const socketId of room) {
+            const s = io.sockets.sockets.get(socketId);
+            if (s) s.disconnect(true);
+          }
+        }
+        // Remove from active users tracking
+        if (io._activeUsers) {
+          io._activeUsers.delete(id);
+          io.emit('app:active-users', { count: io._activeUsers.size });
+          io.to('admins').emit('app:active-user-ids', { ids: Array.from(io._activeUsers.keys()) });
+        }
+      }
+    }
+
     res.json({ message: `User ${status} successfully`, user: { _id: updated._id, name: updated.name, status: updated.status } });
   } catch (error) {
     console.error(error);

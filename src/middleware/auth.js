@@ -13,7 +13,12 @@ const protect = async (req, res, next) => {
       if (!req.user) {
         return res.status(401).json({ message: 'User not found' });
       }
-      
+
+      // Block requests from blocked/inactive users — force logout on frontend
+      if (req.user.status === 'blocked') {
+        return res.status(403).json({ message: 'Your account has been blocked', blocked: true });
+      }
+
       next();
     } catch (error) {
       console.error(error);

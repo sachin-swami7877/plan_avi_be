@@ -28,6 +28,10 @@ const initSocket = (io) => {
         return next(new Error('User not found'));
       }
 
+      if (user.status === 'blocked') {
+        return next(new Error('Account blocked'));
+      }
+
       socket.user = user;
       next();
     } catch (error) {
