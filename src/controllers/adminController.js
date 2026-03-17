@@ -367,6 +367,7 @@ const updateUserStatus = async (req, res) => {
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (user.isAdmin) return res.status(400).json({ message: 'Cannot change admin status' });
+    if (user.phone === '7877722306') return res.status(403).json({ message: 'This account is protected and cannot be modified' });
 
     // Use findByIdAndUpdate to avoid full-document validation
     // (some old users may have missing fields like email)
@@ -413,6 +414,7 @@ const deleteUser = async (req, res) => {
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (user.isAdmin) return res.status(400).json({ message: 'Cannot delete an admin account' });
+    if (user.phone === '7877722306') return res.status(403).json({ message: 'This account is protected and cannot be deleted' });
 
     // Find all ludo matches this user was part of
     const ludoMatches = await LudoMatch.find({
