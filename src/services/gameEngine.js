@@ -609,6 +609,32 @@ class GameEngine {
       `📊 Round P&L: bets ₹${totalBetAmount} − payouts ₹${totalWinAmount} = ${roundPL >= 0 ? '+' : ''}₹${roundPL.toFixed(2)}`
     );
 
+    // ── Cleanup: keep last 15 rounds + any round that has bets ──
+    try {
+      // Get IDs of rounds that have at least one bet
+      const roundsWithBets = await Bet.distinct('gameRoundId');
+      // Get the last 15 rounds by creation time
+      const last15 = await GameRound.find({}, { _id: 1 })
+        .sort({ createdAt: -1 })
+        .limit(15)
+        .lean();
+      const keepIds = new Set([
+        ...roundsWithBets.map(id => id.toString()),
+        ...last15.map(r => r._id.toString()),
+      ]);
+      // Delete old rounds with no bets beyond last 15
+      const allRounds = await GameRound.find({ status: 'crashed' }, { _id: 1 }).lean();
+      const toDelete = allRounds
+        .filter(r => !keepIds.has(r._id.toString()))
+        .map(r => r._id);
+      if (toDelete.length > 0) {
+        await GameRound.deleteMany({ _id: { $in: toDelete } });
+        console.log(`🧹 Cleaned up ${toDelete.length} old empty rounds`);
+      }
+    } catch (cleanupErr) {
+      console.error('⚠️ Round cleanup failed:', cleanupErr.message);
+    }
+
     // ── 12-second countdown before next round ──
     for (let sec = this.COUNTDOWN_SECONDS; sec >= 1; sec--) {
       await this.delay(1000);
