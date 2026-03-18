@@ -60,13 +60,17 @@ const getDashboardStats = async (req, res) => {
     // Bet stats use date filter
     const betFilter = hasPeriodFilter ? dateFilter : {};
 
-    // Aviator bets: field is 'amount' (bet) and 'profit' (net win for won bets)
+    // Aviator bets: only sum profit for WON bets (lost bets have profit=-amount which skews total)
     const [totalBets, totalWins, betAgg] = await Promise.all([
       Bet.countDocuments(betFilter),
       Bet.countDocuments({ status: 'won', ...betFilter }),
       Bet.aggregate([
         { $match: betFilter },
-        { $group: { _id: null, totalBetAmount: { $sum: '$amount' }, totalWinAmount: { $sum: '$profit' } } },
+        { $group: {
+          _id: null,
+          totalBetAmount: { $sum: '$amount' },
+          totalWinAmount: { $sum: { $cond: [{ $eq: ['$status', 'won'] }, '$profit', 0] } },
+        }},
       ]),
     ]);
 
@@ -124,6 +128,12 @@ const getDashboardStats = async (req, res) => {
       totalWins,
       totalBetAmount,
       totalWinAmount,
+      // Per-game breakdown for filtered house profit
+      games: {
+        aviator: { bet: aviatorBet, win: aviatorWin },
+        ludo: { bet: ludoBet, win: ludoWin },
+        spinner: { bet: spinBet, win: spinWin },
+      },
     });
   } catch (error) {
     console.error(error);
@@ -473,8 +483,8 @@ const getWalletRequests = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
 
-    // Build totals filter independently (not from filter) — no status, just type + date
-    const totalsFilter = {};
+    // Build totals filter — exclude rejected, just approved + pending, per type + date
+    const totalsFilter = { status: { $ne: 'rejected' } };
     if (type) totalsFilter.type = type;
     if (filter.createdAt) {
       totalsFilter.createdAt = {};
@@ -1406,8 +1416,8 @@ const getLudoProfit = async (req, res) => {
     const filter = { status: 'completed', winnerId: { $ne: null } };
     if (startDate || endDate) {
       filter.createdAt = {};
-      if (startDate) { const s = new Date(startDate); if (!isNaN(s)) { s.setUTCHours(0,0,0,0); filter.createdAt.$gte = s; } }
-      if (endDate) { const e = new Date(endDate); if (!isNaN(e)) { e.setUTCHours(23,59,59,999); filter.createdAt.$lte = e; } }
+      if (startDate) { const s = new Date(startDate + 'T00:00:00+05:30'); if (!isNaN(s)) filter.createdAt.$gte = s; }
+      if (endDate) { const e = new Date(endDate + 'T23:59:59+05:30'); if (!isNaN(e)) filter.createdAt.$lte = e; }
       if (!Object.keys(filter.createdAt).length) delete filter.createdAt;
     }
 
@@ -1451,11 +1461,11 @@ const getAviatorProfit = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
 
-    const filter = { status: 'crashed' };
+    const filter = { status: 'crashed', totalBetAmount: { $gt: 0 } };
     if (startDate || endDate) {
       filter.createdAt = {};
-      if (startDate) { const s = new Date(startDate); if (!isNaN(s)) { s.setUTCHours(0,0,0,0); filter.createdAt.$gte = s; } }
-      if (endDate) { const e = new Date(endDate); if (!isNaN(e)) { e.setUTCHours(23,59,59,999); filter.createdAt.$lte = e; } }
+      if (startDate) { const s = new Date(startDate + 'T00:00:00+05:30'); if (!isNaN(s)) filter.createdAt.$gte = s; }
+      if (endDate) { const e = new Date(endDate + 'T23:59:59+05:30'); if (!isNaN(e)) filter.createdAt.$lte = e; }
       if (!Object.keys(filter.createdAt).length) delete filter.createdAt;
     }
 
