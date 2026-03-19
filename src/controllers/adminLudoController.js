@@ -311,9 +311,18 @@ const updateLudoMatchStatus = async (req, res) => {
     if (!match) return res.status(404).json({ message: 'Match not found' });
 
     if (status === 'cancelled') {
-      match.status = 'cancelled';
-      match.cancelledAt = new Date();
-      match.cancelReason = cancelReason || 'Admin cancelled';
+      if (['cancelled', 'completed'].includes(match.status)) {
+        return res.status(400).json({ message: `Match is already ${match.status}. Cannot cancel again.` });
+      }
+      // Atomic claim to prevent race with user cancel / cron
+      const claimed = await LudoMatch.findOneAndUpdate(
+        { _id: match._id, status: { $nin: ['cancelled', 'completed'] } },
+        { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: cancelReason || 'Admin cancelled' } },
+        { new: true }
+      );
+      if (!claimed) {
+        return res.status(400).json({ message: 'Match was already cancelled or completed by another action.' });
+      }
       const shouldRefund = req.body.refund !== false; // default true unless explicitly false
       const Notification = require('../models/Notification');
       const io = req.app.get('io');
@@ -352,10 +361,9 @@ const updateLudoMatchStatus = async (req, res) => {
           }
         }
       }
-      await match.save();
       // Auto-resolve any pending result request for this match
       await LudoResultRequest.updateMany(
-        { matchId: match._id, status: 'pending' },
+        { matchId: claimed._id, status: 'pending' },
         { status: 'resolved', reviewedBy: req.user._id, reviewedAt: new Date(), adminNote: 'Auto-resolved — match admin-cancelled' }
       );
       if (io) {

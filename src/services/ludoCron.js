@@ -7,12 +7,21 @@ const RUN_INTERVAL_MS = 15 * 1000; // every 15 seconds — fast expiry detection
 
 async function expireWaitingMatches(io) {
   const now = new Date();
-  const expired = await LudoMatch.find({
+  // Find expired IDs first, then atomically claim each one
+  const expiredIds = await LudoMatch.find({
     status: 'waiting',
     joinExpiryAt: { $lt: now },
-  });
+  }).distinct('_id');
 
-  for (const match of expired) {
+  for (const matchId of expiredIds) {
+    // Atomic claim — only one process can win; skip if already cancelled
+    const match = await LudoMatch.findOneAndUpdate(
+      { _id: matchId, status: 'waiting' },
+      { $set: { status: 'cancelled', cancelledAt: now, cancelReason: 'Join time expired' } },
+      { new: true }
+    );
+    if (!match) continue; // Already processed by another path
+
     const creator = await User.findById(match.creatorId);
     if (creator) {
       const creatorPlayer = match.players.find(p => p.userId.toString() === creator._id.toString());
@@ -25,10 +34,6 @@ async function expireWaitingMatches(io) {
         balBef, creator.walletBalance, match._id
       );
     }
-    match.status = 'cancelled';
-    match.cancelledAt = now;
-    match.cancelReason = 'Join time expired';
-    await match.save();
 
     // Notify creator about expiry + refund
     await Notification.create({
@@ -46,7 +51,7 @@ async function expireWaitingMatches(io) {
     }
   }
 
-  if (expired.length > 0 && io) {
+  if (expiredIds.length > 0 && io) {
     io.emit('ludo:waiting-updated');
   }
 }
@@ -55,13 +60,21 @@ async function expireWaitingMatches(io) {
 // Full refund to BOTH players — no penalty before game starts
 async function expireRoomCodeMatches(io) {
   const now = new Date();
-  const expired = await LudoMatch.find({
+  const expiredIds = await LudoMatch.find({
     status: 'live',
     roomCodeExpiryAt: { $lt: now },
     $or: [{ roomCode: { $exists: false } }, { roomCode: '' }, { roomCode: null }],
-  });
+  }).distinct('_id');
 
-  for (const match of expired) {
+  for (const matchId of expiredIds) {
+    // Atomic claim — prevents double refund with checkExpiry endpoint
+    const match = await LudoMatch.findOneAndUpdate(
+      { _id: matchId, status: 'live', $or: [{ roomCode: { $exists: false } }, { roomCode: '' }, { roomCode: null }] },
+      { $set: { status: 'cancelled', cancelledAt: now, cancelReason: 'Room code not shared in time' } },
+      { new: true }
+    );
+    if (!match) continue; // Already processed
+
     // Refund both players
     for (const player of match.players) {
       const u = await User.findById(player.userId);
@@ -89,10 +102,6 @@ async function expireRoomCodeMatches(io) {
       }
     }
 
-    match.status = 'cancelled';
-    match.cancelledAt = now;
-    match.cancelReason = 'Room code not shared in time';
-    await match.save();
     console.log(`[Ludo Cron] Room code expired for match ${match._id}, refunded both players`);
   }
 }

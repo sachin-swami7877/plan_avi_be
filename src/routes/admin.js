@@ -54,6 +54,7 @@ const {
 } = require('../controllers/adminLudoController');
 const { protect, adminOnly, fullAdminOnly } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { getKycRequests, approveKyc, rejectKyc } = require('../controllers/kycController');
 
 // All admin routes require authentication and admin role
 router.use(protect);
@@ -111,6 +112,11 @@ router.get('/profit/aviator', fullAdminOnly, getAviatorProfit);
 router.get('/cleanup/preview', fullAdminOnly, getCleanupPreview);
 router.post('/cleanup/photos', fullAdminOnly, cleanupPhotos);
 router.post('/cleanup/ludo-matches', fullAdminOnly, cleanupLudoMatches);
+
+// KYC
+router.get('/kyc', getKycRequests);
+router.put('/kyc/:id/approve', fullAdminOnly, approveKyc);
+router.put('/kyc/:id/reject', fullAdminOnly, rejectKyc);
 
 // Ludo (separate section)
 router.get('/ludo/matches', getAllLudoMatches);

@@ -32,6 +32,8 @@ const adminSettingsSchema = new mongoose.Schema({
   userWarning: { type: String, default: '' },
   // Ludo: number of dummy running battles to show on user app (frontend generates them)
   ludoDummyRunningBattles: { type: Number, default: 15, min: 0, max: 50 },
+  // Ludo: number of dummy open battles to show when no real open battles exist
+  ludoDummyOpenBattles: { type: Number, default: 4, min: 0, max: 20 },
   // Bets toggle (persisted so it survives server restarts)
   betsEnabled: { type: Boolean, default: true },
   // Withdrawal toggle

@@ -14,6 +14,80 @@ const WAITING_EXPIRY_MINUTES = 10;
 const MAX_PLAYERS = 2;
 const ROOM_CODE_EXPIRY_MINUTES = 4;
 
+// Auto-resolve: if request has one 'win' and one 'loss' from different players, credit winner
+async function autoResolveIfPossible(request, match, io) {
+  try {
+    const winClaim = request.claims.find((c) => c.type === 'win');
+    const lossClaim = request.claims.find((c) => c.type === 'loss');
+    if (!winClaim || !lossClaim) return false;
+    if (winClaim.userId.toString() === lossClaim.userId.toString()) return false;
+    if (request.status === 'resolved') return false;
+
+    const winnerId = winClaim.userId;
+    const { commission, winnerAmount } = await calcLudoCommission(
+      match.players.reduce((s, p) => s + p.amountPaid, 0),
+      match.entryAmount
+    );
+
+    const winner = await User.findById(winnerId);
+    if (!winner) return false;
+    const balBeforeWin = winner.walletBalance;
+    winner.creditEarnings(winnerAmount);
+    await winner.save();
+
+    await recordWalletTx(
+      winnerId, 'credit', 'ludo_win', winnerAmount,
+      `Ludo match won — ₹${winnerAmount} prize`,
+      balBeforeWin, winner.walletBalance, match._id
+    );
+
+    match.status = 'completed';
+    match.winnerId = winnerId;
+    await match.save();
+
+    request.winnerId = winnerId;
+    request.status = 'resolved';
+    request.reviewedAt = new Date();
+    request.adminNote = 'Auto-resolved — both players agreed (win + loss)';
+    await request.save();
+
+    // Notify winner
+    const winnerNotif = await Notification.create({
+      userId: winnerId,
+      title: 'You Won!',
+      message: `Congratulations! You won Rs. ${winnerAmount} in Ludo match.`,
+      type: 'game',
+    });
+    if (io) {
+      io.to(`user_${winnerId}`).emit('notification:new', winnerNotif);
+      io.to(`user_${winnerId}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance });
+    }
+
+    // Notify loser
+    const loserPlayer = match.players.find((p) => p.userId.toString() !== winnerId.toString());
+    if (loserPlayer) {
+      const loserNotif = await Notification.create({
+        userId: loserPlayer.userId,
+        title: 'Match Result',
+        message: `You lost the Ludo match (₹${match.entryAmount}). Better luck next time!`,
+        type: 'game',
+      });
+      if (io) io.to(`user_${loserPlayer.userId}`).emit('notification:new', loserNotif);
+    }
+
+    if (io) {
+      io.emit('ludo:match-live');
+      io.emit('ludo:waiting-updated');
+    }
+
+    console.log('[autoResolve] Auto-resolved matchId:', match._id, '| winner:', winner.name, '| amount:', winnerAmount);
+    return true;
+  } catch (err) {
+    console.error('[autoResolve] Error:', err.message);
+    return false;
+  }
+}
+
 // @desc    Create Ludo match (entry amount only; room code added later after opponent joins)
 // @route   POST /api/ludo/create
 const createMatch = async (req, res) => {
@@ -195,6 +269,35 @@ const joinMatch = async (req, res) => {
     match.gameStartedAt = new Date();
     match.roomCodeExpiryAt = new Date(Date.now() + ROOM_CODE_EXPIRY_MINUTES * 60 * 1000);
     await match.save();
+
+    // Auto-cancel other waiting matches created by the same creator (atomic to avoid double refund)
+    const otherWaitingIds = await LudoMatch.find({
+      creatorId: match.creatorId,
+      status: 'waiting',
+      _id: { $ne: match._id },
+    }).distinct('_id');
+    for (const staleId of otherWaitingIds) {
+      const staleMatch = await LudoMatch.findOneAndUpdate(
+        { _id: staleId, status: 'waiting' },
+        { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Auto-cancelled — another match went live' } },
+        { new: true }
+      );
+      if (!staleMatch) continue; // Already processed
+      const creatorPlayer = staleMatch.players[0];
+      if (creatorPlayer) {
+        const creatorUser = await User.findById(staleMatch.creatorId);
+        if (creatorUser) {
+          const balBefore = creatorUser.walletBalance;
+          creatorUser.smartRefund(staleMatch.entryAmount, creatorPlayer.paidFromDeposit, creatorPlayer.paidFromEarnings);
+          await creatorUser.save();
+          await recordWalletTx(
+            creatorUser._id, 'credit', 'ludo_refund', staleMatch.entryAmount,
+            `Ludo match auto-cancelled — opponent joined another match. ₹${staleMatch.entryAmount} refunded`,
+            balBefore, creatorUser.walletBalance, staleMatch._id
+          );
+        }
+      }
+    }
 
     const io = req.app.get('io');
     io.emit('ludo:match-live', { matchId: match._id, match: match.toObject ? match.toObject() : match });
@@ -507,6 +610,16 @@ const cancelMatch = async (req, res) => {
         return res.status(403).json({ message: 'Only the creator can cancel' });
       }
 
+      // Atomic claim — prevents race with cron expiry
+      const claimed = await LudoMatch.findOneAndUpdate(
+        { _id: match._id, status: 'waiting' },
+        { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Creator cancelled' } },
+        { new: true }
+      );
+      if (!claimed) {
+        return res.status(400).json({ message: 'Match was already cancelled or expired.' });
+      }
+
       const user = await User.findById(req.user._id);
       const creatorPlayer = match.players.find(p => p.userId.toString() === user._id.toString());
       const balBeforeCancel = user.walletBalance;
@@ -518,11 +631,6 @@ const cancelMatch = async (req, res) => {
         `Ludo match cancelled by creator — ₹${match.entryAmount} refunded`,
         balBeforeCancel, user.walletBalance, match._id
       );
-
-      match.status = 'cancelled';
-      match.cancelledAt = new Date();
-      match.cancelReason = 'Creator cancelled';
-      await match.save();
 
       const io = req.app.get('io');
       io.emit('ludo:waiting-updated');
@@ -542,6 +650,16 @@ const cancelMatch = async (req, res) => {
       const hasRoomCode = match.roomCode && match.roomCode.trim() !== '';
       if (hasRoomCode) {
         return res.status(400).json({ message: 'Game has started. Use "Cancel as loss" instead.' });
+      }
+
+      // Atomic claim — prevents race with expireRoomCodeMatches cron
+      const claimed = await LudoMatch.findOneAndUpdate(
+        { _id: match._id, status: 'live', $or: [{ roomCode: { $exists: false } }, { roomCode: '' }, { roomCode: null }] },
+        { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Cancelled before room code (full refund)' } },
+        { new: true }
+      );
+      if (!claimed) {
+        return res.status(400).json({ message: 'Match was already cancelled or room code was submitted.' });
       }
 
       // Full refund to both players
@@ -564,11 +682,6 @@ const cancelMatch = async (req, res) => {
           }
         }
       }
-
-      match.status = 'cancelled';
-      match.cancelledAt = new Date();
-      match.cancelReason = 'Cancelled before room code (full refund)';
-      await match.save();
 
       if (io) {
         io.emit('ludo:match-live');
@@ -755,6 +868,18 @@ const submitResult = async (req, res) => {
     }
 
     const io = req.app.get('io');
+
+    // Try auto-resolve (win + loss from both players)
+    const autoResolved = await autoResolveIfPossible(request, match, io);
+    if (autoResolved) {
+      console.log('[submitResult] Auto-resolved: requestId:', request._id);
+      return res.status(201).json({
+        message: 'Result confirmed automatically. Winnings credited!',
+        request: { _id: request._id, status: 'resolved' },
+        autoResolved: true,
+      });
+    }
+
     io.to('admins').emit('admin:ludo-result-request', {
       requestId: request._id,
       matchId: match._id,
@@ -862,6 +987,18 @@ const submitResultBase64 = async (req, res) => {
     }
 
     const io = req.app.get('io');
+
+    // Try auto-resolve (win + loss from both players)
+    const autoResolved = await autoResolveIfPossible(request, match, io);
+    if (autoResolved) {
+      console.log('[submitResultBase64] Auto-resolved: requestId:', request._id);
+      return res.status(201).json({
+        message: 'Result confirmed automatically. Winnings credited!',
+        request: { _id: request._id, status: 'resolved' },
+        autoResolved: true,
+      });
+    }
+
     io.to('admins').emit('admin:ludo-result-request', {
       requestId: request._id,
       matchId: match._id,
@@ -958,6 +1095,18 @@ const submitLoss = async (req, res) => {
     }
 
     const io = req.app.get('io');
+
+    // Try auto-resolve (win + loss from both players)
+    const autoResolved = await autoResolveIfPossible(request, match, io);
+    if (autoResolved) {
+      console.log('[submitLoss] Auto-resolved: requestId:', request._id);
+      return res.json({
+        message: 'Result confirmed automatically. Winnings credited to winner!',
+        request: { _id: request._id, status: 'resolved' },
+        autoResolved: true,
+      });
+    }
+
     io.to('admins').emit('admin:ludo-result-request', { requestId: request._id, matchId: match._id, userName: req.user.name });
 
     // Notify the OTHER player that this user submitted loss
@@ -1150,9 +1299,18 @@ const checkExpiry = async (req, res) => {
       return res.json({ expired: false, status: 'live' });
     }
 
-    // Timer is up — expire and refund both players
+    // Timer is up — atomically claim the match before refunding (prevents race with cron)
+    const claimed = await LudoMatch.findOneAndUpdate(
+      { _id: match._id, status: 'live', $or: [{ roomCode: { $exists: false } }, { roomCode: '' }, { roomCode: null }] },
+      { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Room code not shared in time' } },
+      { new: true }
+    );
+    if (!claimed) {
+      return res.json({ expired: false, status: match.status });
+    }
+
     const io = req.app.get('io');
-    for (const player of match.players) {
+    for (const player of claimed.players) {
       const u = await User.findById(player.userId);
       if (u) {
         const balBef = u.walletBalance;
@@ -1161,7 +1319,7 @@ const checkExpiry = async (req, res) => {
         await recordWalletTx(
           u._id, 'credit', 'ludo_refund', player.amountPaid,
           `Room code not shared in time — ₹${player.amountPaid} refunded`,
-          balBef, u.walletBalance, match._id
+          balBef, u.walletBalance, claimed._id
         );
       }
 
@@ -1173,15 +1331,10 @@ const checkExpiry = async (req, res) => {
       });
 
       if (io) {
-        io.to(`user_${player.userId}`).emit('ludo:match-cancelled', { matchId: match._id.toString() });
+        io.to(`user_${player.userId}`).emit('ludo:match-cancelled', { matchId: claimed._id.toString() });
         io.to(`user_${player.userId}`).emit('wallet:balance-updated');
       }
     }
-
-    match.status = 'cancelled';
-    match.cancelledAt = new Date();
-    match.cancelReason = 'Room code not shared in time';
-    await match.save();
 
     console.log(`[Ludo] Room code expired for match ${match._id} (triggered by client), refunded both`);
 

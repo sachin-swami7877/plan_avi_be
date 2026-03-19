@@ -5,6 +5,7 @@ const {
   adminSendOTP, adminVerifyOTP, adminPasswordLogin,
   adminForgotPasswordSendOTP, adminForgotPasswordVerifyOTP, adminResetPassword,
 } = require('../controllers/authController');
+const { submitKyc, getKycStatus, upload } = require('../controllers/kycController');
 const { protect } = require('../middleware/auth');
 
 // User auth routes
@@ -14,6 +15,8 @@ router.post('/find-email', findEmailByPhone);
 router.put('/set-username', protect, setUsername);
 router.put('/profile', protect, updateProfile);
 router.get('/me', protect, getMe);
+router.post('/kyc', protect, upload.single('aadhaarFront'), submitKyc);
+router.get('/kyc', protect, getKycStatus);
 
 // Admin auth routes (no protect — these are login/reset endpoints)
 router.post('/admin/send-otp', adminSendOTP);

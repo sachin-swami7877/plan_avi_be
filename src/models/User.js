@@ -76,6 +76,11 @@ const userSchema = new mongoose.Schema({
     enum: ['active', 'inactive', 'blocked'],
     default: 'active'
   },
+  kycStatus: {
+    type: String,
+    enum: ['none', 'pending', 'approved', 'rejected'],
+    default: 'none'
+  },
   // Cumulative bonus tracking
   totalBetAmount: {
     type: Number,

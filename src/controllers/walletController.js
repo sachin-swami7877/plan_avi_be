@@ -155,6 +155,11 @@ const createWithdrawalRequest = async (req, res) => {
       return res.status(403).json({ message: reason });
     }
 
+    // KYC check
+    if (req.user.kycStatus !== 'approved') {
+      return res.status(403).json({ message: 'KYC verification required before withdrawal. Please complete KYC on your Profile page.', kycRequired: true });
+    }
+
     const { amount } = req.body;
 
     if (!amount || amount < 100) {
