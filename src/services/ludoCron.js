@@ -45,8 +45,10 @@ async function expireWaitingMatches(io) {
 
     console.log(`[Ludo Cron] Expired waiting match ${match._id}, refunded creator`);
 
-    // Targeted emit so creator's detail page auto-reloads immediately
     if (io) {
+      // Tell ALL clients to remove this match from open battles list instantly
+      io.emit('ludo:match-expired', { matchId: match._id.toString() });
+      // Tell creator their match was cancelled
       io.to(`user_${match.creatorId}`).emit('ludo:match-cancelled', { matchId: match._id.toString() });
     }
   }
