@@ -130,16 +130,19 @@ const approveKyc = async (req, res) => {
     const approvedUser = await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'approved' }, { new: true });
 
     // In-app notification for user
-    await Notification.create({
+    const approveNotif = await Notification.create({
       userId: kyc.userId,
       type: 'kyc',
       title: 'KYC Approved ✅',
       message: 'Aapki KYC verify ho gayi hai. Ab aap withdrawal kar sakte hain.',
     });
 
-    // Socket — instant update on user's screen
+    // Socket — instant badge + kycStatus update
     const io = req.app.get('io');
-    if (io) io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'approved' });
+    if (io) {
+      io.to(`user_${kyc.userId}`).emit('notification:new', approveNotif);
+      io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'approved' });
+    }
 
     // Push notification for user
     if (approvedUser?.fcmTokens?.length) {
@@ -171,16 +174,19 @@ const rejectKyc = async (req, res) => {
     const rejectedUser = await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'rejected' }, { new: true });
 
     // In-app notification for user
-    await Notification.create({
+    const rejectNotif = await Notification.create({
       userId: kyc.userId,
       type: 'kyc',
       title: 'KYC Rejected ❌',
       message: `Aapki KYC reject ho gayi hai. Reason: ${reason}. Profile pe jaake dubara submit karein.`,
     });
 
-    // Socket — instant update on user's screen
+    // Socket — instant badge + kycStatus update
     const io = req.app.get('io');
-    if (io) io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'rejected', reason });
+    if (io) {
+      io.to(`user_${kyc.userId}`).emit('notification:new', rejectNotif);
+      io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'rejected', reason });
+    }
 
     // Push notification for user
     if (rejectedUser?.fcmTokens?.length) {
