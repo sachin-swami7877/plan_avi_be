@@ -26,11 +26,7 @@ const submitKyc = async (req, res) => {
     let aadhaarFrontUrl = null;
     if (req.file) {
       try {
-        const result = await uploadFromBuffer(req.file.buffer, {
-          folder: 'kyc',
-          public_id: `kyc_${userId}_${Date.now()}`,
-        });
-        aadhaarFrontUrl = result.secure_url;
+        aadhaarFrontUrl = await uploadFromBuffer(req.file.buffer, 'kyc', req.file.mimetype || 'image/jpeg');
       } catch (e) {
         return res.status(500).json({ message: 'Image upload failed. Please try again.' });
       }
