@@ -1503,13 +1503,79 @@ const getAviatorProfit = async (req, res) => {
 
 const cleanupPhotos = async (req, res) => {
   try {
-    const { startDate, endDate } = req.body;
+    const { startDate, endDate, photoType } = req.body;
     if (!startDate || !endDate) return res.status(400).json({ message: 'Start and end date required' });
 
     const s = new Date(startDate); s.setUTCHours(0,0,0,0);
     const e = new Date(endDate); e.setUTCHours(23,59,59,999);
 
     const { cloudinary } = require('../config/cloudinary');
+
+    // KYC photos only
+    if (photoType === 'kyc_photos') {
+      const KycRequest = require('../models/KycRequest');
+      const kycDocs = await KycRequest.find({ createdAt: { $gte: s, $lte: e }, aadhaarFrontUrl: { $ne: null } }).lean();
+      const ids = [];
+      for (const doc of kycDocs) {
+        if (doc.aadhaarFrontUrl?.includes('cloudinary.com')) {
+          const parts = doc.aadhaarFrontUrl.split('/upload/');
+          if (parts[1]) {
+            const pathParts = parts[1].split('/'); pathParts.shift();
+            const publicId = pathParts.join('/').replace(/\.[^.]+$/, '');
+            if (publicId) ids.push(publicId);
+          }
+        }
+      }
+      for (let i = 0; i < ids.length; i += 100) {
+        try { await cloudinary.api.delete_resources(ids.slice(i, i + 100)); } catch (err) { console.error('Cloudinary delete error:', err.message); }
+      }
+      await KycRequest.updateMany({ createdAt: { $gte: s, $lte: e }, aadhaarFrontUrl: { $ne: null } }, { $set: { aadhaarFrontUrl: null } });
+      return res.json({ message: `Deleted ${kycDocs.length} KYC aadhaar photos from Cloudinary` });
+    }
+
+    // Deposit photos only
+    if (photoType === 'deposit_photos') {
+      const walletReqs = await WalletRequest.find({ createdAt: { $gte: s, $lte: e }, screenshotUrl: { $ne: null } }).lean();
+      const ids = [];
+      for (const wr of walletReqs) {
+        if (wr.screenshotUrl?.includes('cloudinary.com')) {
+          const parts = wr.screenshotUrl.split('/upload/');
+          if (parts[1]) {
+            const pathParts = parts[1].split('/'); pathParts.shift();
+            const publicId = pathParts.join('/').replace(/\.[^.]+$/, '');
+            if (publicId) ids.push(publicId);
+          }
+        }
+      }
+      for (let i = 0; i < ids.length; i += 100) {
+        try { await cloudinary.api.delete_resources(ids.slice(i, i + 100)); } catch (err) { console.error('Cloudinary delete error:', err.message); }
+      }
+      await WalletRequest.updateMany({ createdAt: { $gte: s, $lte: e }, screenshotUrl: { $ne: null } }, { $set: { screenshotUrl: null } });
+      return res.json({ message: `Deleted ${walletReqs.length} deposit screenshots from Cloudinary` });
+    }
+
+    // Ludo result photos only
+    if (photoType === 'ludo_photos') {
+      const requests = await LudoResultRequest.find({ createdAt: { $gte: s, $lte: e }, 'claims.screenshotUrl': { $ne: null } }).lean();
+      const ids = [];
+      for (const req of requests) {
+        for (const claim of req.claims) {
+          if (claim.screenshotUrl?.includes('cloudinary.com')) {
+            const parts = claim.screenshotUrl.split('/upload/');
+            if (parts[1]) {
+              const pathParts = parts[1].split('/'); pathParts.shift();
+              const publicId = pathParts.join('/').replace(/\.[^.]+$/, '');
+              if (publicId) ids.push(publicId);
+            }
+          }
+        }
+      }
+      for (let i = 0; i < ids.length; i += 100) {
+        try { await cloudinary.api.delete_resources(ids.slice(i, i + 100)); } catch (err) { console.error('Cloudinary delete error:', err.message); }
+      }
+      await LudoResultRequest.updateMany({ createdAt: { $gte: s, $lte: e }, 'claims.screenshotUrl': { $ne: null } }, { $set: { 'claims.$[].screenshotUrl': null } });
+      return res.json({ message: `Deleted ${requests.length} ludo result screenshots from Cloudinary` });
+    }
 
     // Find ludo result requests with screenshots in date range
     const requests = await LudoResultRequest.find({
@@ -1644,6 +1710,23 @@ const getCleanupPreview = async (req, res) => {
     const s = new Date(startDate); s.setUTCHours(0,0,0,0);
     const e = new Date(endDate); e.setUTCHours(23,59,59,999);
 
+    if (type === 'ludo_photos') {
+      const sample = await LudoResultRequest.findOne({ createdAt: { $gte: s, $lte: e }, 'claims.screenshotUrl': { $ne: null } }).lean();
+      const count = await LudoResultRequest.countDocuments({ createdAt: { $gte: s, $lte: e }, 'claims.screenshotUrl': { $ne: null } });
+      const sampleUrl = sample?.claims?.find(c => c.screenshotUrl)?.screenshotUrl || null;
+      return res.json({ count, sampleUrl });
+    }
+    if (type === 'deposit_photos') {
+      const sample = await WalletRequest.findOne({ createdAt: { $gte: s, $lte: e }, screenshotUrl: { $ne: null } }).lean();
+      const count = await WalletRequest.countDocuments({ createdAt: { $gte: s, $lte: e }, screenshotUrl: { $ne: null } });
+      return res.json({ count, sampleUrl: sample?.screenshotUrl || null });
+    }
+    if (type === 'kyc_photos') {
+      const KycRequest = require('../models/KycRequest');
+      const sample = await KycRequest.findOne({ createdAt: { $gte: s, $lte: e }, aadhaarFrontUrl: { $ne: null } }).lean();
+      const count = await KycRequest.countDocuments({ createdAt: { $gte: s, $lte: e }, aadhaarFrontUrl: { $ne: null } });
+      return res.json({ count, sampleUrl: sample?.aadhaarFrontUrl || null });
+    }
     if (type === 'photos') {
       const ludoPhotos = await LudoResultRequest.countDocuments({
         createdAt: { $gte: s, $lte: e },
