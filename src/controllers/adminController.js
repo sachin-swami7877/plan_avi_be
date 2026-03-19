@@ -10,6 +10,7 @@ const AdminSettings = require('../models/AdminSettings');
 const BonusRecord = require('../models/BonusRecord');
 const LudoMatch = require('../models/LudoMatch');
 const LudoResultRequest = require('../models/LudoResultRequest');
+const KycRequest = require('../models/KycRequest');
 const { uploadFromBuffer } = require('../config/cloudinary');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 const { sendPushNotification } = require('../config/firebase');
@@ -1310,15 +1311,16 @@ const getPublicUserWarning = async (req, res) => {
 const getUserDetail = async (req, res) => {
   try {
     const { id } = req.params;
-    const [user, walletRequests, aviatorBets, ludoMatches, spinnerRecords] = await Promise.all([
+    const [user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest] = await Promise.all([
       User.findById(id).select('-otp -otpExpiry'),
       WalletRequest.find({ userId: id }).sort({ createdAt: -1 }).limit(100),
       Bet.find({ userId: id }).sort({ createdAt: -1 }).limit(100),
       LudoMatch.find({ $or: [{ creatorId: id }, { 'players.userId': id }] }).sort({ createdAt: -1 }).limit(100),
       SpinnerRecord.find({ userId: id }).sort({ createdAt: -1 }).limit(100),
+      KycRequest.findOne({ userId: id }).lean(),
     ]);
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ user, walletRequests, aviatorBets, ludoMatches, spinnerRecords });
+    res.json({ user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest: kycRequest || null });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

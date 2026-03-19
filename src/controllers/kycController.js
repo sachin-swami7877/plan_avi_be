@@ -1,6 +1,7 @@
 const KycRequest = require('../models/KycRequest');
 const User = require('../models/User');
 const { uploadFromBuffer } = require('../config/cloudinary');
+const { sendPushToAdmins, sendPushNotification } = require('../config/firebase');
 const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -47,7 +48,14 @@ const submitKyc = async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    await User.findByIdAndUpdate(userId, { kycStatus: 'pending' });
+    const updatedUser = await User.findByIdAndUpdate(userId, { kycStatus: 'pending' }, { new: true });
+
+    // Notify admins about new KYC submission
+    sendPushToAdmins(
+      'New KYC Request',
+      `${updatedUser.name} (${updatedUser.phone}) ne KYC submit ki hai. Review karein.`,
+      { type: 'kyc_submitted' }
+    );
 
     res.json({ message: 'KYC submitted successfully. Awaiting admin review.', kyc });
   } catch (error) {
@@ -95,7 +103,15 @@ const approveKyc = async (req, res) => {
       { new: true }
     );
     if (!kyc) return res.status(404).json({ message: 'KYC request not found' });
-    await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'approved' });
+    const approvedUser = await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'approved' }, { new: true });
+    if (approvedUser?.fcmTokens?.length) {
+      sendPushNotification(
+        approvedUser._id, approvedUser.fcmTokens,
+        'KYC Approved ✅',
+        'Aapki KYC verify ho gayi hai. Ab aap withdrawal kar sakte hain.',
+        { type: 'kyc_approved' }
+      );
+    }
     res.json({ message: 'KYC approved', kyc });
   } catch (error) {
     console.error(error);
@@ -114,7 +130,15 @@ const rejectKyc = async (req, res) => {
       { new: true }
     );
     if (!kyc) return res.status(404).json({ message: 'KYC request not found' });
-    await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'rejected' });
+    const rejectedUser = await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'rejected' }, { new: true });
+    if (rejectedUser?.fcmTokens?.length) {
+      sendPushNotification(
+        rejectedUser._id, rejectedUser.fcmTokens,
+        'KYC Rejected ❌',
+        `Aapki KYC reject ho gayi hai. Reason: ${reason}. Profile se dubara submit karein.`,
+        { type: 'kyc_rejected' }
+      );
+    }
     res.json({ message: 'KYC rejected', kyc });
   } catch (error) {
     console.error(error);
