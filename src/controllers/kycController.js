@@ -9,11 +9,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 const submitKyc = async (req, res) => {
   try {
     const { email, aadhaarNumber, address } = req.body;
-    if (!email || !aadhaarNumber || !address) {
-      return res.status(400).json({ message: 'Email, Aadhaar number, and address are required' });
-    }
-    if (!/^\d{12}$/.test(aadhaarNumber.replace(/\s/g, ''))) {
-      return res.status(400).json({ message: 'Aadhaar number must be 12 digits' });
+    if (!email || !address) {
+      return res.status(400).json({ message: 'Email and address are required' });
     }
 
     const userId = req.user._id;
@@ -46,7 +43,7 @@ const submitKyc = async (req, res) => {
 
     const kyc = await KycRequest.findOneAndUpdate(
       { userId },
-      { email, aadhaarNumber: aadhaarNumber.replace(/\s/g, ''), aadhaarFrontUrl, address, status: 'pending', rejectionReason: '', reviewedAt: null, reviewedBy: null },
+      { email, aadhaarNumber: (aadhaarNumber || '').replace(/\s/g, ''), aadhaarFrontUrl, address, status: 'pending', rejectionReason: '', reviewedAt: null, reviewedBy: null },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
