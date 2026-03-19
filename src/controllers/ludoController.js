@@ -111,6 +111,12 @@ const createMatch = async (req, res) => {
       return res.status(400).json({ message: 'Insufficient balance' });
     }
 
+    // Max 2 waiting matches per user
+    const waitingCount = await LudoMatch.countDocuments({ creatorId: req.user._id, status: 'waiting' });
+    if (waitingCount >= 2) {
+      return res.status(400).json({ message: 'You can have at most 2 open battles at a time.' });
+    }
+
     const joinExpiryAt = new Date(Date.now() + WAITING_EXPIRY_MINUTES * 60 * 1000);
 
     const balBeforeCreate = user.walletBalance;
