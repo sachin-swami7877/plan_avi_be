@@ -51,37 +51,45 @@ const submitKyc = async (req, res) => {
 
     const updatedUser = await User.findByIdAndUpdate(userId, { kycStatus: 'pending' }, { new: true });
 
-    // In-app notification for user
-    await Notification.create({
-      userId,
-      type: 'kyc',
-      title: 'KYC Submitted',
-      message: 'Aapki KYC request submit ho gayi hai. Admin review karenge aur aapko notify karenge.',
-    });
-
-    // In-app + push + socket notification for all admins
-    const admins = await User.find({ $or: [{ isAdmin: true }, { isSubAdmin: true }] }).select('_id fcmTokens');
-    await Promise.all(admins.map(a => Notification.create({
-      userId: a._id,
-      type: 'kyc',
-      title: 'New KYC Request',
-      message: `${updatedUser.name} (${updatedUser.phone}) ne KYC submit ki hai. Review karein.`,
-    })));
-    sendPushToAdmins(
-      'New KYC Request',
-      `${updatedUser.name} (${updatedUser.phone}) ne KYC submit ki hai. Review karein.`,
-      { type: 'kyc_submitted' }
-    );
-    const io = req.app.get('io');
-    if (io) {
-      io.to('admins').emit('admin:kyc-request', {
-        userId: updatedUser._id,
-        userName: updatedUser.name,
-        userPhone: updatedUser.phone,
-      });
-    }
-
+    // Send response immediately — notifications are non-blocking
     res.json({ message: 'KYC submitted successfully. Awaiting admin review.', kyc });
+
+    // Fire notifications after response (won't affect user if they fail)
+    (async () => {
+      try {
+        await Notification.create({
+          userId,
+          type: 'kyc',
+          title: 'KYC Submitted',
+          message: 'Aapki KYC request submit ho gayi hai. Admin review karenge aur aapko notify karenge.',
+        });
+
+        const admins = await User.find({ $or: [{ isAdmin: true }, { isSubAdmin: true }] }).select('_id fcmTokens');
+        await Promise.all(admins.map(a => Notification.create({
+          userId: a._id,
+          type: 'kyc',
+          title: 'New KYC Request',
+          message: `${updatedUser.name} (${updatedUser.phone}) ne KYC submit ki hai. Review karein.`,
+        })));
+
+        sendPushToAdmins(
+          'New KYC Request',
+          `${updatedUser.name} (${updatedUser.phone}) ne KYC submit ki hai. Review karein.`,
+          { type: 'kyc_submitted' }
+        );
+
+        const io = req.app.get('io');
+        if (io) {
+          io.to('admins').emit('admin:kyc-request', {
+            userId: updatedUser._id,
+            userName: updatedUser.name,
+            userPhone: updatedUser.phone,
+          });
+        }
+      } catch (notifErr) {
+        console.error('[KYC submit] Notification error (non-fatal):', notifErr.message);
+      }
+    })();
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -129,31 +137,37 @@ const approveKyc = async (req, res) => {
     if (!kyc) return res.status(404).json({ message: 'KYC request not found' });
     const approvedUser = await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'approved' }, { new: true });
 
-    // In-app notification for user
-    const approveNotif = await Notification.create({
-      userId: kyc.userId,
-      type: 'kyc',
-      title: 'KYC Approved ✅',
-      message: 'Aapki KYC verify ho gayi hai. Ab aap withdrawal kar sakte hain.',
-    });
-
-    // Socket — instant badge + kycStatus update
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`user_${kyc.userId}`).emit('notification:new', approveNotif);
-      io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'approved' });
-    }
-
-    // Push notification for user
-    if (approvedUser?.fcmTokens?.length) {
-      sendPushNotification(
-        approvedUser._id, approvedUser.fcmTokens,
-        'KYC Approved ✅',
-        'Aapki KYC verify ho gayi hai. Ab aap withdrawal kar sakte hain.',
-        { type: 'kyc_approved' }
-      );
-    }
+    // Send response immediately
     res.json({ message: 'KYC approved', kyc });
+
+    // Fire notifications after response
+    (async () => {
+      try {
+        const approveNotif = await Notification.create({
+          userId: kyc.userId,
+          type: 'kyc',
+          title: 'KYC Approved ✅',
+          message: 'Aapki KYC verify ho gayi hai. Ab aap withdrawal kar sakte hain.',
+        });
+
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user_${kyc.userId}`).emit('notification:new', approveNotif);
+          io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'approved' });
+        }
+
+        if (approvedUser?.fcmTokens?.length) {
+          sendPushNotification(
+            approvedUser._id, approvedUser.fcmTokens,
+            'KYC Approved ✅',
+            'Aapki KYC verify ho gayi hai. Ab aap withdrawal kar sakte hain.',
+            { type: 'kyc_approved' }
+          );
+        }
+      } catch (notifErr) {
+        console.error('[KYC approve] Notification error (non-fatal):', notifErr.message);
+      }
+    })();
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -173,35 +187,75 @@ const rejectKyc = async (req, res) => {
     if (!kyc) return res.status(404).json({ message: 'KYC request not found' });
     const rejectedUser = await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'rejected' }, { new: true });
 
-    // In-app notification for user
-    const rejectNotif = await Notification.create({
-      userId: kyc.userId,
-      type: 'kyc',
-      title: 'KYC Rejected ❌',
-      message: `Aapki KYC reject ho gayi hai. Reason: ${reason}. Profile pe jaake dubara submit karein.`,
-    });
-
-    // Socket — instant badge + kycStatus update
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`user_${kyc.userId}`).emit('notification:new', rejectNotif);
-      io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'rejected', reason });
-    }
-
-    // Push notification for user
-    if (rejectedUser?.fcmTokens?.length) {
-      sendPushNotification(
-        rejectedUser._id, rejectedUser.fcmTokens,
-        'KYC Rejected ❌',
-        `Aapki KYC reject ho gayi hai. Reason: ${reason}. Profile se dubara submit karein.`,
-        { type: 'kyc_rejected' }
-      );
-    }
+    // Send response immediately
     res.json({ message: 'KYC rejected', kyc });
+
+    // Fire notifications after response
+    (async () => {
+      try {
+        const rejectNotif = await Notification.create({
+          userId: kyc.userId,
+          type: 'kyc',
+          title: 'KYC Rejected ❌',
+          message: `Aapki KYC reject ho gayi hai. Reason: ${reason}. Profile pe jaake dubara submit karein.`,
+        });
+
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user_${kyc.userId}`).emit('notification:new', rejectNotif);
+          io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'rejected', reason });
+        }
+
+        if (rejectedUser?.fcmTokens?.length) {
+          sendPushNotification(
+            rejectedUser._id, rejectedUser.fcmTokens,
+            'KYC Rejected ❌',
+            `Aapki KYC reject ho gayi hai. Reason: ${reason}. Profile se dubara submit karein.`,
+            { type: 'kyc_rejected' }
+          );
+        }
+      } catch (notifErr) {
+        console.error('[KYC reject] Notification error (non-fatal):', notifErr.message);
+      }
+    })();
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
   }
 };
 
-module.exports = { submitKyc, getKycStatus, getKycRequests, approveKyc, rejectKyc, upload };
+// DELETE /api/admin/kyc/:id — delete KYC record entirely (user must resubmit from scratch)
+const deleteKyc = async (req, res) => {
+  try {
+    const kyc = await KycRequest.findByIdAndDelete(req.params.id);
+    if (!kyc) return res.status(404).json({ message: 'KYC request not found' });
+    // Reset user kycStatus to 'none' so they can resubmit
+    await User.findByIdAndUpdate(kyc.userId, { kycStatus: 'none' });
+
+    // Notify user (non-blocking)
+    (async () => {
+      try {
+        const notif = await Notification.create({
+          userId: kyc.userId,
+          type: 'kyc',
+          title: 'KYC Deleted',
+          message: 'Aapki KYC request delete kar di gayi hai. Profile pe jaake dubara submit karein.',
+        });
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user_${kyc.userId}`).emit('notification:new', notif);
+          io.to(`user_${kyc.userId}`).emit('user:kyc-updated', { kycStatus: 'none' });
+        }
+      } catch (e) {
+        console.error('[KYC delete] Notification error (non-fatal):', e.message);
+      }
+    })();
+
+    res.json({ message: 'KYC deleted. User must resubmit.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+module.exports = { submitKyc, getKycStatus, getKycRequests, approveKyc, rejectKyc, deleteKyc, upload };
