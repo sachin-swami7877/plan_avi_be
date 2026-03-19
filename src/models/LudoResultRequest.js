@@ -65,6 +65,5 @@ const ludoResultRequestSchema = new mongoose.Schema({
 });
 
 ludoResultRequestSchema.index({ status: 1 });
-ludoResultRequestSchema.index({ matchId: 1 });
 
 module.exports = mongoose.model('LudoResultRequest', ludoResultRequestSchema);
