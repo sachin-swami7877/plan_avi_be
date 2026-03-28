@@ -531,16 +531,35 @@ const processWalletRequest = async (req, res) => {
     const { id } = req.params;
     const { action, editedAmount } = req.body;
 
-    const walletRequest = await WalletRequest.findById(id);
-    if (!walletRequest) return res.status(404).json({ message: 'Request not found' });
-    if (walletRequest.status !== 'pending') return res.status(400).json({ message: 'Request already processed' });
+    if (!['approve', 'reject', 'reject_deduct'].includes(action)) {
+      return res.status(400).json({ message: 'Invalid action' });
+    }
+    if (action === 'reject_deduct') {
+      // Pre-check type before atomic claim
+      const preCheck = await WalletRequest.findById(id);
+      if (preCheck && preCheck.type !== 'withdrawal') {
+        return res.status(400).json({ message: 'Reject & Deduct is only for withdrawal requests' });
+      }
+    }
 
-    // Allow admin to edit the deposit amount before processing
-    if (editedAmount !== undefined && editedAmount !== null && walletRequest.type === 'deposit') {
+    // Determine new status based on action
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+
+    // Build atomic update — also apply editedAmount if provided
+    const atomicUpdate = { $set: { status: newStatus, processedAt: new Date() } };
+    if (editedAmount !== undefined && editedAmount !== null) {
       const newAmt = Number(editedAmount);
       if (isNaN(newAmt) || newAmt < 1) return res.status(400).json({ message: 'Edited amount must be at least ₹1' });
-      walletRequest.amount = newAmt;
+      atomicUpdate.$set.amount = newAmt;
     }
+
+    // Atomic claim — prevents double-credit if admin double-clicks approve
+    const walletRequest = await WalletRequest.findOneAndUpdate(
+      { _id: id, status: 'pending' },
+      atomicUpdate,
+      { new: true }
+    );
+    if (!walletRequest) return res.status(400).json({ message: 'Request already processed or not found' });
 
     const user = await User.findById(walletRequest.userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -552,21 +571,12 @@ const processWalletRequest = async (req, res) => {
         user.creditDeposit(walletRequest.amount);
         user.totalDeposited = (user.totalDeposited || 0) + walletRequest.amount;
       }
-      walletRequest.status = 'approved';
     } else if (action === 'reject') {
       if (walletRequest.type === 'withdrawal') {
         user.creditEarnings(walletRequest.amount);
       }
-      walletRequest.status = 'rejected';
-    } else if (action === 'reject_deduct') {
-      // Reject withdrawal WITHOUT refund — amount is permanently deducted
-      if (walletRequest.type !== 'withdrawal') {
-        return res.status(400).json({ message: 'Reject & Deduct is only for withdrawal requests' });
-      }
-      walletRequest.status = 'rejected';
-    } else {
-      return res.status(400).json({ message: 'Invalid action' });
     }
+    // reject_deduct — no wallet change
 
     await user.save();
     const newBalance = user.walletBalance;
@@ -597,9 +607,10 @@ const processWalletRequest = async (req, res) => {
       );
     }
 
-    walletRequest.processedBy = req.user._id;
-    walletRequest.processedAt = new Date();
-    await walletRequest.save();
+    await WalletRequest.updateOne(
+      { _id: walletRequest._id },
+      { $set: { processedBy: req.user._id } }
+    );
 
     // Notify user
     const notification = await Notification.create({

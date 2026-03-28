@@ -43,6 +43,28 @@ const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '90d' });
 };
 
+// Single-device enforcement: save new token + force-logout any existing session
+const enforceOneDevice = async (userId, newToken, io) => {
+  try {
+    // Save the new token as the only valid one
+    await User.updateOne({ _id: userId }, { activeToken: newToken });
+
+    if (!io) return;
+
+    // Force-logout all existing sockets for this user (old device/browser)
+    const userRoom = `user_${userId}`;
+    io.to(userRoom).emit('force-logout', { reason: 'Logged in from another device' });
+
+    // Disconnect all old sockets for this user
+    const sockets = await io.in(userRoom).fetchSockets();
+    for (const s of sockets) {
+      s.disconnect(true);
+    }
+  } catch (err) {
+    console.error('[enforceOneDevice] Error:', err.message);
+  }
+};
+
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 // @desc    Send OTP for login (supports email or mobile number)
@@ -239,6 +261,10 @@ const verifyOTP = async (req, res) => {
         }
 
         const token = generateToken(user._id);
+        // Single-device: invalidate old sessions
+        const io = req.app.get('io');
+        await enforceOneDevice(user._id, token, io);
+
         return res.json({
           _id: user._id, name: user.name, email: user.email, phone: user.phone,
           upiId: user.upiId, upiNumber: user.upiNumber, walletBalance: user.walletBalance,
@@ -275,6 +301,10 @@ const verifyOTP = async (req, res) => {
     await User.updateOne({ _id: user._id }, { otp: null, otpExpiry: null });
 
     const token = generateToken(user._id);
+
+    // Single-device: invalidate old sessions
+    const io = req.app.get('io');
+    await enforceOneDevice(user._id, token, io);
 
     // Flags: need to complete profile (name and/or phone missing)?
     const needsUsername = !user.name || user.name.trim() === '';
@@ -508,6 +538,10 @@ const adminVerifyOTP = async (req, res) => {
     await User.updateOne({ _id: user._id }, { otp: null, otpExpiry: null });
     const token = generateToken(user._id);
 
+    // Single-device: invalidate old sessions
+    const io = req.app.get('io');
+    await enforceOneDevice(user._id, token, io);
+
     res.json({
       _id: user._id, name: user.name, email: user.email, phone: user.phone,
       role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin,
@@ -550,6 +584,10 @@ const adminPasswordLogin = async (req, res) => {
     if (!isMatch) return res.status(401).json({ message: 'Invalid password' });
 
     const token = generateToken(user._id);
+
+    // Single-device: invalidate old sessions
+    const io = req.app.get('io');
+    await enforceOneDevice(user._id, token, io);
 
     res.json({
       _id: user._id, name: user.name, email: user.email, phone: user.phone,

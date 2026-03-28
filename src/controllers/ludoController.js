@@ -23,6 +23,14 @@ async function autoResolveIfPossible(request, match, io) {
     if (winClaim.userId.toString() === lossClaim.userId.toString()) return false;
     if (request.status === 'resolved') return false;
 
+    // Atomic claim — prevent double-credit race when both players submit simultaneously
+    const claimed = await LudoResultRequest.findOneAndUpdate(
+      { _id: request._id, status: 'pending' },
+      { $set: { status: 'resolved', reviewedAt: new Date(), adminNote: 'Auto-resolved — both players agreed (win + loss)', winnerId: winClaim.userId } },
+      { new: true }
+    );
+    if (!claimed) return false; // Another concurrent call already resolved it
+
     const winnerId = winClaim.userId;
     const { commission, winnerAmount } = await calcLudoCommission(
       match.players.reduce((s, p) => s + p.amountPaid, 0),
@@ -44,12 +52,6 @@ async function autoResolveIfPossible(request, match, io) {
     match.status = 'completed';
     match.winnerId = winnerId;
     await match.save();
-
-    request.winnerId = winnerId;
-    request.status = 'resolved';
-    request.reviewedAt = new Date();
-    request.adminNote = 'Auto-resolved — both players agreed (win + loss)';
-    await request.save();
 
     // Notify winner
     const winnerNotif = await Notification.create({

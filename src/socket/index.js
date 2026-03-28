@@ -22,7 +22,7 @@ const initSocket = (io) => {
       }
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id).select('-otp -otpExpiry');
+      const user = await User.findById(decoded.id).select('-otp -otpExpiry +activeToken');
 
       if (!user) {
         return next(new Error('User not found'));
@@ -32,7 +32,13 @@ const initSocket = (io) => {
         return next(new Error('Account blocked'));
       }
 
+      // Single-device check: reject socket if token doesn't match activeToken
+      if (user.activeToken && user.activeToken !== token) {
+        return next(new Error('SESSION_EXPIRED_OTHER_DEVICE'));
+      }
+
       socket.user = user;
+      socket.user.activeToken = undefined; // don't keep in memory
       next();
     } catch (error) {
       // Allow connection but without auth

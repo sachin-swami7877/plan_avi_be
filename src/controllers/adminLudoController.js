@@ -122,26 +122,24 @@ const getLudoResultRequests = async (req, res) => {
 // @route   PUT /api/admin/ludo/result-requests/:id/approve
 const approveLudoResultRequest = async (req, res) => {
   try {
-    const request = await LudoResultRequest.findById(req.params.id);
-    if (!request) return res.status(404).json({ message: 'Request not found' });
-    if (request.status !== 'pending') {
-      return res.status(400).json({ message: 'Request already processed' });
-    }
-
     const { winnerId } = req.body;
     if (!winnerId) return res.status(400).json({ message: 'winnerId is required' });
+
+    // Atomic claim — prevents double-credit if admin double-clicks or auto-resolve races
+    const request = await LudoResultRequest.findOneAndUpdate(
+      { _id: req.params.id, status: 'pending' },
+      { $set: { status: 'resolved', winnerId, reviewedBy: req.user._id, reviewedAt: new Date(), adminNote: req.body.note || null } },
+      { new: true }
+    );
+    if (!request) {
+      return res.status(400).json({ message: 'Request already processed or not found' });
+    }
 
     const match = await LudoMatch.findById(request.matchId);
     if (!match) return res.status(404).json({ message: 'Match not found' });
 
-    // If match already completed/cancelled with a winner, auto-resolve the request
+    // If match already completed/cancelled with a winner, no wallet action needed
     if (['completed', 'cancelled'].includes(match.status) && match.winnerId) {
-      request.winnerId = match.winnerId;
-      request.status = 'resolved';
-      request.reviewedBy = req.user._id;
-      request.reviewedAt = new Date();
-      request.adminNote = 'Auto-resolved — match already settled';
-      await request.save();
       return res.json({ message: 'Match was already settled. Request auto-resolved.', match });
     }
 
@@ -167,13 +165,6 @@ const approveLudoResultRequest = async (req, res) => {
     match.status = 'completed';
     match.winnerId = winnerId;
     await match.save();
-
-    request.winnerId = winnerId;
-    request.status = 'resolved';
-    request.reviewedBy = req.user._id;
-    request.reviewedAt = new Date();
-    request.adminNote = req.body.note || null;
-    await request.save();
 
     const Notification = require('../models/Notification');
     const io = req.app.get('io');
@@ -433,16 +424,17 @@ const bulkDeleteLudoMatches = async (req, res) => {
 // @route   PUT /api/admin/ludo/result-requests/:id/resolve-dispute
 const resolveDispute = async (req, res) => {
   try {
-    const request = await LudoResultRequest.findById(req.params.id);
-    if (!request) return res.status(404).json({ message: 'Request not found' });
-    if (request.status !== 'pending') {
-      return res.status(400).json({ message: 'Request already processed' });
-    }
-    if (!['cancel_dispute', 'cancel_accepted'].includes(request.disputeType)) {
-      return res.status(400).json({ message: 'This is not a cancel dispute/accepted request' });
-    }
-
     const { refundDecisions, adminNote, winnerId } = req.body;
+
+    // Atomic claim — prevents double-processing
+    const request = await LudoResultRequest.findOneAndUpdate(
+      { _id: req.params.id, status: 'pending', disputeType: { $in: ['cancel_dispute', 'cancel_accepted'] } },
+      { $set: { status: 'resolved', reviewedBy: req.user._id, reviewedAt: new Date(), adminNote: adminNote || null, winnerId: winnerId || null } },
+      { new: true }
+    );
+    if (!request) {
+      return res.status(400).json({ message: 'Request already processed, not found, or not a cancel dispute' });
+    }
 
     const match = await LudoMatch.findById(request.matchId);
     if (!match) return res.status(404).json({ message: 'Match not found' });
@@ -608,13 +600,11 @@ const resolveDispute = async (req, res) => {
 
     await match.save();
 
-    request.status = 'resolved';
-    request.refundDecisions = savedDecisions;
-    request.winnerId = winnerId || null;
-    request.reviewedBy = req.user._id;
-    request.reviewedAt = new Date();
-    request.adminNote = adminNote || null;
-    await request.save();
+    // Update refund decisions on the already-claimed request
+    await LudoResultRequest.updateOne(
+      { _id: request._id },
+      { $set: { refundDecisions: savedDecisions } }
+    );
 
     // Emit match-resolved to all players for real-time UI refresh
     if (io) {

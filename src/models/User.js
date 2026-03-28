@@ -110,6 +110,12 @@ const userSchema = new mongoose.Schema({
   fcmTokens: {
     type: [String],
     default: []
+  },
+  // Single-device enforcement: only the most recent token is valid
+  activeToken: {
+    type: String,
+    default: null,
+    select: false
   }
 }, {
   timestamps: true
