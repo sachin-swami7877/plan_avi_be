@@ -1118,6 +1118,7 @@ const getSettings = async (req, res) => {
       ludoCommTier3Pct: settings.ludoCommTier3Pct ?? 5,
       withdrawalsEnabled: settings.withdrawalsEnabled ?? true,
       withdrawalDisableReason: settings.withdrawalDisableReason || '',
+      aviatorComingSoon: settings.aviatorComingSoon ?? false,
     });
   } catch (error) {
     console.error(error);
@@ -1147,6 +1148,7 @@ const updateSettings = async (req, res) => {
       ludoEnabled,
       ludoDisableReason,
       ludoWarning,
+      aviatorComingSoon,
     } = req.body;
 
     // Handle betsEnabled toggle (game engine + persist to DB)
@@ -1186,6 +1188,7 @@ const updateSettings = async (req, res) => {
     if (typeof ludoEnabled === 'boolean') settings.ludoEnabled = ludoEnabled;
     if (ludoDisableReason !== undefined) settings.ludoDisableReason = ludoDisableReason;
     if (ludoWarning !== undefined) settings.ludoWarning = ludoWarning;
+    if (typeof aviatorComingSoon === 'boolean') settings.aviatorComingSoon = aviatorComingSoon;
     await settings.save();
 
     res.json({ message: 'Settings updated', betsEnabled: typeof betsEnabled === 'boolean' ? betsEnabled : undefined });
@@ -1311,6 +1314,18 @@ const getPublicUserWarning = async (req, res) => {
   try {
     const s = await getOrCreateSettings();
     res.json({ userWarning: s.userWarning || '' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Get aviator coming soon status (public)
+// @route   GET /api/settings/aviator-status
+const getPublicAviatorStatus = async (req, res) => {
+  try {
+    const s = await getOrCreateSettings();
+    res.json({ aviatorComingSoon: s.aviatorComingSoon ?? false });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -1811,6 +1826,7 @@ module.exports = {
   getPublicLayout,
   getPublicUserWarning,
   getPublicLandingStats,
+  getPublicAviatorStatus,
   getLudoProfit,
   getAviatorProfit,
   cleanupPhotos,
