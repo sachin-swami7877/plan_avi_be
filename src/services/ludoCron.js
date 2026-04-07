@@ -25,13 +25,21 @@ async function expireWaitingMatches(io) {
     const creator = await User.findById(match.creatorId);
     if (creator) {
       const creatorPlayer = match.players.find(p => p.userId.toString() === creator._id.toString());
+      const refundAmt = match.entryAmount;
+      const paidDep = creatorPlayer?.paidFromDeposit || 0;
+      const paidEarn = creatorPlayer?.paidFromEarnings || 0;
+      const total = paidDep + paidEarn;
+      const refundToDeposit = total > 0 ? Math.round((paidDep / total) * refundAmt * 100) / 100 : refundAmt;
+      const refundToEarnings = refundAmt - refundToDeposit;
       const balBef = creator.walletBalance;
-      creator.smartRefund(match.entryAmount, creatorPlayer?.paidFromDeposit, creatorPlayer?.paidFromEarnings);
-      await creator.save();
+      await User.updateOne(
+        { _id: creator._id },
+        { $inc: { walletBalance: refundAmt, depositBalance: refundToDeposit, earningsBalance: refundToEarnings } }
+      );
       await recordWalletTx(
-        creator._id, 'credit', 'ludo_refund', match.entryAmount,
-        `Ludo match expired (no opponent) — ₹${match.entryAmount} refunded`,
-        balBef, creator.walletBalance, match._id
+        creator._id, 'credit', 'ludo_refund', refundAmt,
+        `Ludo match expired (no opponent) — ₹${refundAmt} refunded`,
+        balBef, balBef + refundAmt, match._id
       );
     }
 
@@ -77,17 +85,25 @@ async function expireRoomCodeMatches(io) {
     );
     if (!match) continue; // Already processed
 
-    // Refund both players
+    // Refund both players (atomic $inc to prevent race with concurrent operations)
     for (const player of match.players) {
       const u = await User.findById(player.userId);
       if (u) {
+        const refundAmt = player.amountPaid;
+        const paidDep = player.paidFromDeposit || 0;
+        const paidEarn = player.paidFromEarnings || 0;
+        const total = paidDep + paidEarn;
+        const refundToDeposit = total > 0 ? Math.round((paidDep / total) * refundAmt * 100) / 100 : refundAmt;
+        const refundToEarnings = refundAmt - refundToDeposit;
         const balBef = u.walletBalance;
-        u.smartRefund(player.amountPaid, player.paidFromDeposit, player.paidFromEarnings);
-        await u.save();
+        await User.updateOne(
+          { _id: u._id },
+          { $inc: { walletBalance: refundAmt, depositBalance: refundToDeposit, earningsBalance: refundToEarnings } }
+        );
         await recordWalletTx(
-          u._id, 'credit', 'ludo_refund', player.amountPaid,
-          `Room code not shared in time — ₹${player.amountPaid} refunded`,
-          balBef, u.walletBalance, match._id
+          u._id, 'credit', 'ludo_refund', refundAmt,
+          `Room code not shared in time — ₹${refundAmt} refunded`,
+          balBef, balBef + refundAmt, match._id
         );
       }
 

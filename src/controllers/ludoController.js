@@ -293,17 +293,27 @@ const joinMatch = async (req, res) => {
       if (!staleMatch) continue; // Already processed
       const creatorPlayer = staleMatch.players[0];
       if (creatorPlayer) {
-        const creatorUser = await User.findById(staleMatch.creatorId);
-        if (creatorUser) {
-          const balBefore = creatorUser.walletBalance;
-          creatorUser.smartRefund(staleMatch.entryAmount, creatorPlayer.paidFromDeposit, creatorPlayer.paidFromEarnings);
-          await creatorUser.save();
-          await recordWalletTx(
-            creatorUser._id, 'credit', 'ludo_refund', staleMatch.entryAmount,
-            `Ludo match auto-cancelled — opponent joined another match. ₹${staleMatch.entryAmount} refunded`,
-            balBefore, creatorUser.walletBalance, staleMatch._id
-          );
-        }
+        // Use atomic $inc to prevent race condition with concurrent spinner/game operations
+        const refundAmount = staleMatch.entryAmount;
+        const paidDep = creatorPlayer.paidFromDeposit || 0;
+        const paidEarn = creatorPlayer.paidFromEarnings || 0;
+        const total = paidDep + paidEarn;
+        const refundToDeposit = total > 0 ? Math.round((paidDep / total) * refundAmount * 100) / 100 : refundAmount;
+        const refundToEarnings = refundAmount - refundToDeposit;
+
+        const before = await User.findById(staleMatch.creatorId);
+        if (!before) continue;
+        const balBefore = before.walletBalance;
+
+        await User.updateOne(
+          { _id: staleMatch.creatorId },
+          { $inc: { walletBalance: refundAmount, depositBalance: refundToDeposit, earningsBalance: refundToEarnings } }
+        );
+        await recordWalletTx(
+          staleMatch.creatorId, 'credit', 'ludo_refund', refundAmount,
+          `Ludo match auto-cancelled — opponent joined another match. ₹${refundAmount} refunded`,
+          balBefore, balBefore + refundAmount, staleMatch._id
+        );
       }
     }
 
@@ -630,14 +640,23 @@ const cancelMatch = async (req, res) => {
 
       const user = await User.findById(req.user._id);
       const creatorPlayer = match.players.find(p => p.userId.toString() === user._id.toString());
+      const refundAmt = match.entryAmount;
+      const paidDep = creatorPlayer?.paidFromDeposit || 0;
+      const paidEarn = creatorPlayer?.paidFromEarnings || 0;
+      const total = paidDep + paidEarn;
+      const refundToDeposit = total > 0 ? Math.round((paidDep / total) * refundAmt * 100) / 100 : refundAmt;
+      const refundToEarnings = refundAmt - refundToDeposit;
       const balBeforeCancel = user.walletBalance;
-      user.smartRefund(match.entryAmount, creatorPlayer?.paidFromDeposit, creatorPlayer?.paidFromEarnings);
-      await user.save();
+      const updated = await User.findOneAndUpdate(
+        { _id: user._id },
+        { $inc: { walletBalance: refundAmt, depositBalance: refundToDeposit, earningsBalance: refundToEarnings } },
+        { new: true }
+      );
 
       await recordWalletTx(
-        user._id, 'credit', 'ludo_refund', match.entryAmount,
-        `Ludo match cancelled by creator — ₹${match.entryAmount} refunded`,
-        balBeforeCancel, user.walletBalance, match._id
+        user._id, 'credit', 'ludo_refund', refundAmt,
+        `Ludo match cancelled by creator — ₹${refundAmt} refunded`,
+        balBeforeCancel, updated.walletBalance, match._id
       );
 
       const io = req.app.get('io');
@@ -645,7 +664,7 @@ const cancelMatch = async (req, res) => {
 
       return res.json({
         message: 'Match cancelled. Entry fee refunded.',
-        newBalance: user.walletBalance,
+        newBalance: updated.walletBalance,
       });
     }
 
@@ -670,22 +689,31 @@ const cancelMatch = async (req, res) => {
         return res.status(400).json({ message: 'Match was already cancelled or room code was submitted.' });
       }
 
-      // Full refund to both players
+      // Full refund to both players (atomic $inc)
       const io = req.app.get('io');
       for (const player of match.players) {
         const pUser = await User.findById(player.userId);
         if (pUser) {
+          const refundAmt = player.amountPaid;
+          const paidDep = player.paidFromDeposit || 0;
+          const paidEarn = player.paidFromEarnings || 0;
+          const total = paidDep + paidEarn;
+          const refundToDeposit = total > 0 ? Math.round((paidDep / total) * refundAmt * 100) / 100 : refundAmt;
+          const refundToEarnings = refundAmt - refundToDeposit;
           const balBef = pUser.walletBalance;
-          pUser.smartRefund(player.amountPaid, player.paidFromDeposit, player.paidFromEarnings);
-          await pUser.save();
+          const updatedP = await User.findOneAndUpdate(
+            { _id: pUser._id },
+            { $inc: { walletBalance: refundAmt, depositBalance: refundToDeposit, earningsBalance: refundToEarnings } },
+            { new: true }
+          );
           await recordWalletTx(
-            pUser._id, 'credit', 'ludo_refund', player.amountPaid,
-            `Ludo match cancelled before room code — ₹${player.amountPaid} refunded`,
-            balBef, pUser.walletBalance, match._id
+            pUser._id, 'credit', 'ludo_refund', refundAmt,
+            `Ludo match cancelled before room code — ₹${refundAmt} refunded`,
+            balBef, updatedP.walletBalance, match._id
           );
 
           if (io) {
-            io.to(`user_${player.userId}`).emit('wallet:balance-updated', { walletBalance: pUser.walletBalance });
+            io.to(`user_${player.userId}`).emit('wallet:balance-updated', { walletBalance: updatedP.walletBalance });
             io.to(`user_${player.userId}`).emit('ludo:match-cancelled', { matchId: match._id.toString() });
           }
         }

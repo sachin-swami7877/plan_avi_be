@@ -87,18 +87,35 @@ const playSpinner = async (req, res) => {
       forcedThankYou.set(userKey, forceCount);
     }
 
-    // Pehle spin cost deduct, phir win amount add
+    // Atomic balance update using $inc to prevent race conditions
+    // (e.g. concurrent ludo refund + spinner play overwriting each other)
+    const netChange = winAmount - spinCost; // e.g. win 100, cost 50 → net +50; win 0, cost 50 → net -50
     const balBefore = user.walletBalance;
-    user.smartDeduct(spinCost);
-    if (winAmount > 0) user.creditEarnings(winAmount);
-    await user.save();
+
+    // Deduct from deposit first (same logic as smartDeduct), credit wins to earnings
+    const fromDeposit = Math.min(user.depositBalance, spinCost);
+    const fromEarnings = spinCost - fromDeposit;
+    const incUpdate = {
+      walletBalance: netChange,
+      depositBalance: -fromDeposit,
+      earningsBalance: -fromEarnings + winAmount,
+    };
+
+    const updated = await User.findOneAndUpdate(
+      { _id: user._id, walletBalance: { $gte: spinCost } },
+      { $inc: incUpdate },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(400).json({ message: 'Insufficient balance' });
+    }
 
     await SpinnerRecord.create({
       userId: user._id,
       outcome,
       winAmount,
       spinCost,
-      balanceAfter: user.walletBalance,
+      balanceAfter: updated.walletBalance,
     });
 
     // Record spin cost debit
@@ -112,7 +129,7 @@ const playSpinner = async (req, res) => {
       await recordWalletTx(
         user._id, 'credit', 'spin_win', winAmount,
         `Spinner win — ₹${winAmount} credited`,
-        balBefore - spinCost, user.walletBalance
+        balBefore - spinCost, updated.walletBalance
       );
     }
 
@@ -120,7 +137,7 @@ const playSpinner = async (req, res) => {
       outcome,
       winAmount,
       spinCost,
-      newBalance: user.walletBalance,
+      newBalance: updated.walletBalance,
       message: outcome === 'thank_you' ? 'Thank you!' : `You won ₹${winAmount}!`,
     });
   } catch (error) {
