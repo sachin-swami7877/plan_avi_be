@@ -812,12 +812,17 @@ const getWinningBets = async (req, res) => {
 
 const getAdminNotifications = async (req, res) => {
   try {
-    const [walletRequests, ludoRequests] = await Promise.all([
+    const KycRequest = require('../models/KycRequest');
+    const [walletRequests, ludoRequests, kycRequests] = await Promise.all([
       WalletRequest.find({ status: 'pending' })
         .populate('userId', 'name phone')
         .sort({ createdAt: -1 })
         .limit(50),
       LudoResultRequest.find({ status: 'pending' })
+        .sort({ createdAt: -1 })
+        .limit(50),
+      KycRequest.find({ status: 'pending' })
+        .populate('userId', 'name phone')
         .sort({ createdAt: -1 })
         .limit(50),
     ]);
@@ -832,8 +837,18 @@ const getAdminNotifications = async (req, res) => {
       createdAt: r.createdAt,
     }));
 
+    // Transform KYC requests
+    const kycNotifs = kycRequests.map((r) => ({
+      _id: r._id,
+      type: 'kyc',
+      userName: r.userId?.name || 'User',
+      userPhone: r.userId?.phone,
+      userId: r.userId?._id,
+      createdAt: r.createdAt,
+    }));
+
     // Merge and sort by createdAt descending
-    const all = [...walletRequests.map((r) => r.toObject()), ...ludoNotifs]
+    const all = [...walletRequests.map((r) => r.toObject()), ...ludoNotifs, ...kycNotifs]
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json(all);

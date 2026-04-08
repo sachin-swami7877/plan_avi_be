@@ -331,6 +331,8 @@ const verifyOTP = async (req, res) => {
       upiNumber: user.upiNumber,
       walletBalance: user.walletBalance,
       isAdmin: user.isAdmin,
+      isSuperAdmin: user.isSuperAdmin,
+      role: user.role,
       status: user.status,
       totalBetAmount: user.totalBetAmount,
       bonusClaimed: user.bonusClaimed,
@@ -426,7 +428,7 @@ const updateProfile = async (req, res) => {
 // @route   GET /api/auth/me
 const getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('-otp -otpExpiry');
+    const user = await User.findById(req.user._id).select('-otp -otpExpiry +isSuperAdmin');
     res.json(user);
   } catch (error) {
     console.error(error);
