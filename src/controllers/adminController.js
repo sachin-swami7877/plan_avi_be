@@ -263,13 +263,21 @@ const updateUser = async (req, res) => {
 
     if (name !== undefined) user.name = String(name).trim() || user.name;
     if (role !== undefined) {
-      const validRoles = ['user', 'admin', 'manager'];
-      if (!validRoles.includes(role)) return res.status(400).json({ message: 'Invalid role' });
+      // Superadmin can assign any role; admin can assign up to 'admin' only
+      const callerRole = req.user.role;
+      const allowedRoles = callerRole === 'superadmin'
+        ? ['user', 'manager', 'admin', 'superadmin']
+        : ['user', 'manager', 'admin'];
+      if (!allowedRoles.includes(role)) return res.status(400).json({ message: 'Invalid role' });
+      // Prevent non-superadmin from changing a superadmin's role
+      if (user.role === 'superadmin' && callerRole !== 'superadmin') {
+        return res.status(403).json({ message: 'Only super admins can modify super admin users' });
+      }
       user.role = role;
     }
 
     await user.save();
-    res.json({ _id: user._id, name: user.name, role: user.role, isAdmin: user.isAdmin });
+    res.json({ _id: user._id, name: user.name, role: user.role, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -1119,6 +1127,7 @@ const getSettings = async (req, res) => {
       withdrawalsEnabled: settings.withdrawalsEnabled ?? true,
       withdrawalDisableReason: settings.withdrawalDisableReason || '',
       aviatorComingSoon: settings.aviatorComingSoon ?? false,
+      spinnerComingSoon: settings.spinnerComingSoon ?? false,
     });
   } catch (error) {
     console.error(error);
@@ -1149,6 +1158,7 @@ const updateSettings = async (req, res) => {
       ludoDisableReason,
       ludoWarning,
       aviatorComingSoon,
+      spinnerComingSoon,
     } = req.body;
 
     // Handle betsEnabled toggle (game engine + persist to DB)
@@ -1189,6 +1199,7 @@ const updateSettings = async (req, res) => {
     if (ludoDisableReason !== undefined) settings.ludoDisableReason = ludoDisableReason;
     if (ludoWarning !== undefined) settings.ludoWarning = ludoWarning;
     if (typeof aviatorComingSoon === 'boolean') settings.aviatorComingSoon = aviatorComingSoon;
+    if (typeof spinnerComingSoon === 'boolean') settings.spinnerComingSoon = spinnerComingSoon;
     await settings.save();
 
     res.json({ message: 'Settings updated', betsEnabled: typeof betsEnabled === 'boolean' ? betsEnabled : undefined });
@@ -1320,12 +1331,15 @@ const getPublicUserWarning = async (req, res) => {
   }
 };
 
-// @desc    Get aviator coming soon status (public)
+// @desc    Get game visibility status (public)
 // @route   GET /api/settings/aviator-status
 const getPublicAviatorStatus = async (req, res) => {
   try {
     const s = await getOrCreateSettings();
-    res.json({ aviatorComingSoon: s.aviatorComingSoon ?? false });
+    res.json({
+      aviatorComingSoon: s.aviatorComingSoon ?? false,
+      spinnerComingSoon: s.spinnerComingSoon ?? false,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -1385,12 +1399,14 @@ const getUserTransactions = async (req, res) => {
 const getPendingCounts = async (req, res) => {
   try {
     const LudoResultRequest = require('../models/LudoResultRequest');
-    const [pendingDeposits, pendingWithdrawals, pendingLudo] = await Promise.all([
+    const KycRequest = require('../models/KycRequest');
+    const [pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc] = await Promise.all([
       WalletRequest.countDocuments({ type: 'deposit', status: 'pending' }),
       WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending' }),
       LudoResultRequest.countDocuments({ status: 'pending' }),
+      KycRequest.countDocuments({ status: 'pending' }),
     ]);
-    res.json({ pendingDeposits, pendingWithdrawals, pendingLudo });
+    res.json({ pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }

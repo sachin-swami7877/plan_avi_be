@@ -60,8 +60,12 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'manager'],
+    enum: ['user', 'admin', 'manager', 'superadmin'],
     default: 'user'
+  },
+  isSuperAdmin: {
+    type: Boolean,
+    default: false
   },
   isAdmin: {
     type: Boolean,
@@ -121,13 +125,15 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Keep role and isAdmin/isSubAdmin in sync
+// Keep role and isAdmin/isSubAdmin/isSuperAdmin in sync
 userSchema.pre('save', function (next) {
   if (this.isModified('role')) {
-    this.isAdmin = this.role === 'admin';
-    this.isSubAdmin = this.role === 'manager' || this.role === 'admin';
-  } else if (this.isModified('isAdmin') || this.isModified('isSubAdmin')) {
-    if (this.isAdmin) this.role = 'admin';
+    this.isSuperAdmin = this.role === 'superadmin';
+    this.isAdmin = this.role === 'admin' || this.role === 'superadmin';
+    this.isSubAdmin = this.role === 'manager' || this.role === 'admin' || this.role === 'superadmin';
+  } else if (this.isModified('isSuperAdmin') || this.isModified('isAdmin') || this.isModified('isSubAdmin')) {
+    if (this.isSuperAdmin) this.role = 'superadmin';
+    else if (this.isAdmin) this.role = 'admin';
     else if (this.isSubAdmin) this.role = 'manager';
     else this.role = 'user';
   }

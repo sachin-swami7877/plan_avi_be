@@ -268,7 +268,7 @@ const verifyOTP = async (req, res) => {
         return res.json({
           _id: user._id, name: user.name, email: user.email, phone: user.phone,
           upiId: user.upiId, upiNumber: user.upiNumber, walletBalance: user.walletBalance,
-          isAdmin: user.isAdmin, status: user.status,
+          isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, status: user.status,
           totalBetAmount: user.totalBetAmount, bonusClaimed: user.bonusClaimed,
           token, needsUsername: true, needsPhone: false, needsProfile: true,
         });
@@ -490,7 +490,7 @@ const findAdminByPhone = async (rawPhone) => {
     $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
   });
   if (!user) return { error: 'No account found with this mobile number', status: 404 };
-  if (user.role !== 'admin' && user.role !== 'manager') return { error: 'Access denied. Admin or Manager role required.', status: 403 };
+  if (user.role !== 'superadmin' && user.role !== 'admin' && user.role !== 'manager') return { error: 'Access denied. Admin or Manager role required.', status: 403 };
   if (user.status === 'blocked') return { error: 'Your account has been blocked. Please contact support.', status: 403 };
   if (user.status === 'inactive') return { error: 'Your account is inactive. Please contact support.', status: 403 };
   return { user, last10 };
@@ -544,7 +544,7 @@ const adminVerifyOTP = async (req, res) => {
 
     res.json({
       _id: user._id, name: user.name, email: user.email, phone: user.phone,
-      role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin,
+      role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin, isSuperAdmin: user.isSuperAdmin,
       status: user.status, token,
     });
   } catch (error) {
@@ -572,7 +572,7 @@ const adminPasswordLogin = async (req, res) => {
     }).select('+password');
 
     if (!user) return res.status(404).json({ message: 'No account found with this mobile number' });
-    if (user.role !== 'admin' && user.role !== 'manager') return res.status(403).json({ message: 'Access denied. Admin or Manager role required.' });
+    if (user.role !== 'superadmin' && user.role !== 'admin' && user.role !== 'manager') return res.status(403).json({ message: 'Access denied. Admin or Manager role required.' });
     if (user.status === 'blocked') return res.status(403).json({ message: 'Your account has been blocked.' });
     if (user.status === 'inactive') return res.status(403).json({ message: 'Your account is inactive.' });
 
@@ -591,7 +591,7 @@ const adminPasswordLogin = async (req, res) => {
 
     res.json({
       _id: user._id, name: user.name, email: user.email, phone: user.phone,
-      role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin,
+      role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin, isSuperAdmin: user.isSuperAdmin,
       status: user.status, token,
     });
   } catch (error) {
@@ -670,7 +670,7 @@ const adminResetPassword = async (req, res) => {
 
     const user = await User.findById(decoded.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
-    if (user.role !== 'admin' && user.role !== 'manager') return res.status(403).json({ message: 'Access denied.' });
+    if (user.role !== 'superadmin' && user.role !== 'admin' && user.role !== 'manager') return res.status(403).json({ message: 'Access denied.' });
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);

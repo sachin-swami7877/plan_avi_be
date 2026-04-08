@@ -40,7 +40,7 @@ const protect = async (req, res, next) => {
 };
 
 const adminOnly = async (req, res, next) => {
-  if (req.user && (req.user.role === 'admin' || req.user.role === 'manager' || req.user.isAdmin || req.user.isSubAdmin)) {
+  if (req.user && (req.user.role === 'superadmin' || req.user.role === 'admin' || req.user.role === 'manager' || req.user.isAdmin || req.user.isSubAdmin)) {
     next();
   } else {
     return res.status(403).json({ message: 'Not authorized as admin' });
@@ -48,7 +48,7 @@ const adminOnly = async (req, res, next) => {
 };
 
 const fullAdminOnly = async (req, res, next) => {
-  if (req.user && (req.user.role === 'admin' || req.user.isAdmin)) {
+  if (req.user && (req.user.role === 'superadmin' || req.user.role === 'admin' || req.user.isAdmin)) {
     next();
   } else {
     return res.status(403).json({ message: 'Not authorized as full admin' });
