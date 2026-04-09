@@ -11,6 +11,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 const submitKyc = async (req, res) => {
   try {
     const { name, aadhaarNumber, address } = req.body;
+    console.log('[KYC Submit] User:', req.user._id, '| files:', Object.keys(req.files || {}), '| body keys:', Object.keys(req.body));
     if (!name || !name.trim()) {
       return res.status(400).json({ message: 'Name is required' });
     }

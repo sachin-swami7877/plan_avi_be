@@ -15,7 +15,15 @@ router.post('/find-email', findEmailByPhone);
 router.put('/set-username', protect, setUsername);
 router.put('/profile', protect, updateProfile);
 router.get('/me', protect, getMe);
-router.post('/kyc', protect, upload.fields([{ name: 'aadhaarFront', maxCount: 1 }, { name: 'aadhaarBack', maxCount: 1 }]), submitKyc);
+router.post('/kyc', protect, (req, res, next) => {
+  upload.fields([{ name: 'aadhaarFront', maxCount: 1 }, { name: 'aadhaarBack', maxCount: 1 }])(req, res, (err) => {
+    if (err) {
+      console.error('[KYC Upload Error]', err.message, err.code);
+      return res.status(400).json({ message: `Upload error: ${err.message}` });
+    }
+    next();
+  });
+}, submitKyc);
 router.get('/kyc', protect, getKycStatus);
 
 // Admin auth routes (no protect — these are login/reset endpoints)
