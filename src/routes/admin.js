@@ -41,6 +41,7 @@ const {
   cleanupLudoMatches,
   getCleanupPreview,
   exportUsers,
+  getAdminCreditLog,
 } = require('../controllers/adminController');
 const {
   getAllLudoMatches,
@@ -103,6 +104,9 @@ router.get('/bonus-records', getBonusRecords);
 
 // Export
 router.get('/export/users', fullAdminOnly, exportUsers);
+
+// Admin Credit/Debit Log (super admin only — fullAdminOnly allows admin+superadmin)
+router.get('/credit-log', fullAdminOnly, getAdminCreditLog);
 
 // Profit
 router.get('/profit/ludo', fullAdminOnly, getLudoProfit);

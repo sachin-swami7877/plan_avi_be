@@ -10,9 +10,12 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 // POST /api/user/kyc — submit or resubmit KYC
 const submitKyc = async (req, res) => {
   try {
-    const { email, aadhaarNumber, address } = req.body;
-    if (!email || !address) {
-      return res.status(400).json({ message: 'Email and address are required' });
+    const { name, aadhaarNumber, address } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
+    if (!address) {
+      return res.status(400).json({ message: 'Address is required' });
     }
 
     const userId = req.user._id;
@@ -22,26 +25,43 @@ const submitKyc = async (req, res) => {
       return res.status(400).json({ message: 'KYC already approved' });
     }
 
+    const existing = await KycRequest.findOne({ userId });
+
     // Upload aadhaar front image
     let aadhaarFrontUrl = null;
-    if (req.file) {
+    const frontFile = req.files?.aadhaarFront?.[0];
+    if (frontFile) {
       try {
-        aadhaarFrontUrl = await uploadFromBuffer(req.file.buffer, 'kyc', req.file.mimetype || 'image/jpeg');
+        aadhaarFrontUrl = await uploadFromBuffer(frontFile.buffer, 'kyc', frontFile.mimetype || 'image/jpeg');
       } catch (e) {
-        return res.status(500).json({ message: 'Image upload failed. Please try again.' });
+        return res.status(500).json({ message: 'Front image upload failed. Please try again.' });
       }
     } else {
-      // Check if existing request already has a photo
-      const existing = await KycRequest.findOne({ userId });
       if (!existing?.aadhaarFrontUrl) {
         return res.status(400).json({ message: 'Aadhaar front photo is required' });
       }
       aadhaarFrontUrl = existing.aadhaarFrontUrl;
     }
 
+    // Upload aadhaar back image
+    let aadhaarBackUrl = null;
+    const backFile = req.files?.aadhaarBack?.[0];
+    if (backFile) {
+      try {
+        aadhaarBackUrl = await uploadFromBuffer(backFile.buffer, 'kyc', backFile.mimetype || 'image/jpeg');
+      } catch (e) {
+        return res.status(500).json({ message: 'Back image upload failed. Please try again.' });
+      }
+    } else {
+      if (!existing?.aadhaarBackUrl) {
+        return res.status(400).json({ message: 'Aadhaar back photo is required' });
+      }
+      aadhaarBackUrl = existing.aadhaarBackUrl;
+    }
+
     const kyc = await KycRequest.findOneAndUpdate(
       { userId },
-      { email, aadhaarNumber: (aadhaarNumber || '').replace(/\s/g, ''), aadhaarFrontUrl, address, status: 'pending', rejectionReason: '', reviewedAt: null, reviewedBy: null },
+      { name: name.trim(), aadhaarNumber: (aadhaarNumber || '').replace(/\s/g, ''), aadhaarFrontUrl, aadhaarBackUrl, address, status: 'pending', rejectionReason: '', reviewedAt: null, reviewedBy: null },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 

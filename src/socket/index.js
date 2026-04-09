@@ -1,13 +1,25 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const HIDDEN_PHONES = ['9166821247', '7877722306'];
+
 const initSocket = (io) => {
   // Track active authenticated users: userId -> Set of socketIds
   const activeUsers = new Map();
+  const hiddenUserIds = new Set(); // super admin user IDs to exclude from count
   io._activeUsers = activeUsers;
 
   const broadcastActiveCount = () => {
-    io.emit('app:active-users', { count: activeUsers.size });
-    io.to('admins').emit('app:active-user-ids', { ids: Array.from(activeUsers.keys()) });
+    // Exclude hidden super admin users from count
+    let visibleCount = 0;
+    const visibleIds = [];
+    for (const [uid] of activeUsers) {
+      if (!hiddenUserIds.has(uid)) {
+        visibleCount++;
+        visibleIds.push(uid);
+      }
+    }
+    io.emit('app:active-users', { count: visibleCount });
+    io.to('admins').emit('app:active-user-ids', { ids: visibleIds });
   };
 
   // Authentication middleware for socket
@@ -55,8 +67,11 @@ const initSocket = (io) => {
       socket.join(`user_${socket.user._id}`);
       console.log(`👤 User ${socket.user.name} joined room user_${socket.user._id}`);
 
-      // Track active user
+      // Track active user (mark hidden super admins)
       const userId = socket.user._id.toString();
+      if (HIDDEN_PHONES.includes(socket.user.phone)) {
+        hiddenUserIds.add(userId);
+      }
       if (!activeUsers.has(userId)) {
         activeUsers.set(userId, new Set());
       }

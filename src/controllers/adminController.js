@@ -191,6 +191,10 @@ const getUsers = async (req, res) => {
       if (balanceMax !== undefined) filter.walletBalance.$lte = Number(balanceMax);
     }
 
+    // Hide protected super admin accounts from all user listings
+    const HIDDEN_PHONES = ['9166821247', '7877722306'];
+    filter.phone = { ...(filter.phone || {}), $nin: HIDDEN_PHONES };
+
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
@@ -386,7 +390,7 @@ const updateUserStatus = async (req, res) => {
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (user.isAdmin) return res.status(400).json({ message: 'Cannot change admin status' });
-    if (user.phone === '7877722306') return res.status(403).json({ message: 'This account is protected and cannot be modified' });
+    if (['9166821247', '7877722306'].includes(user.phone)) return res.status(403).json({ message: 'This account is protected and cannot be modified' });
 
     // Use findByIdAndUpdate to avoid full-document validation
     // (some old users may have missing fields like email)
@@ -433,7 +437,7 @@ const deleteUser = async (req, res) => {
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (user.isAdmin) return res.status(400).json({ message: 'Cannot delete an admin account' });
-    if (user.phone === '7877722306') return res.status(403).json({ message: 'This account is protected and cannot be deleted' });
+    if (['9166821247', '7877722306'].includes(user.phone)) return res.status(403).json({ message: 'This account is protected and cannot be deleted' });
 
     // Find all ludo matches this user was part of
     const ludoMatches = await LudoMatch.find({
@@ -1817,6 +1821,39 @@ const getCleanupPreview = async (req, res) => {
   }
 };
 
+// @desc    Get admin credit/debit log (super admin only)
+// @route   GET /api/admin/credit-log
+const getAdminCreditLog = async (req, res) => {
+  try {
+    const { page = 1, limit = 30 } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = { category: { $in: ['admin_credit', 'admin_debit'] } };
+
+    const [records, totalCount] = await Promise.all([
+      WalletTransaction.find(filter)
+        .populate('userId', 'name phone')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      WalletTransaction.countDocuments(filter),
+    ]);
+
+    res.json({
+      records,
+      totalCount,
+      page: pageNum,
+      totalPages: Math.ceil(totalCount / limitNum),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getPendingCounts,
@@ -1864,4 +1901,5 @@ module.exports = {
   cleanupLudoMatches,
   getCleanupPreview,
   exportUsers,
+  getAdminCreditLog,
 };
