@@ -428,7 +428,7 @@ const updateProfile = async (req, res) => {
 // @route   GET /api/auth/me
 const getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('-otp -otpExpiry +isSuperAdmin');
+    const user = await User.findById(req.user._id).select('-otp -otpExpiry');
     res.json(user);
   } catch (error) {
     console.error(error);

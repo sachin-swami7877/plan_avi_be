@@ -62,7 +62,7 @@ async function autoResolveIfPossible(request, match, io) {
     });
     if (io) {
       io.to(`user_${winnerId}`).emit('notification:new', winnerNotif);
-      io.to(`user_${winnerId}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance });
+      io.to(`user_${winnerId}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance, depositBalance: winner.depositBalance, earningsBalance: winner.earningsBalance });
     }
 
     // Notify loser
@@ -713,7 +713,7 @@ const cancelMatch = async (req, res) => {
           );
 
           if (io) {
-            io.to(`user_${player.userId}`).emit('wallet:balance-updated', { walletBalance: updatedP.walletBalance });
+            io.to(`user_${player.userId}`).emit('wallet:balance-updated', { walletBalance: updatedP.walletBalance, depositBalance: updatedP.depositBalance, earningsBalance: updatedP.earningsBalance });
             io.to(`user_${player.userId}`).emit('ludo:match-cancelled', { matchId: match._id.toString() });
           }
         }

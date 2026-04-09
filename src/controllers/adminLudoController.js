@@ -178,7 +178,7 @@ const approveLudoResultRequest = async (req, res) => {
     });
     if (io) {
       io.to(`user_${winnerId}`).emit('notification:new', winnerNotif);
-      io.to(`user_${winnerId}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance });
+      io.to(`user_${winnerId}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance, depositBalance: winner.depositBalance, earningsBalance: winner.earningsBalance });
     }
 
     // Notify rejected claimants
@@ -329,7 +329,7 @@ const updateLudoMatchStatus = async (req, res) => {
               `Ludo match admin-cancelled — ₹${p.amountPaid} refunded`,
               balBef, u.walletBalance, match._id
             );
-            if (io) io.to(`user_${p.userId}`).emit('wallet:balance-updated', { walletBalance: u.walletBalance });
+            if (io) io.to(`user_${p.userId}`).emit('wallet:balance-updated', { walletBalance: u.walletBalance, depositBalance: u.depositBalance, earningsBalance: u.earningsBalance });
           }
           const notif = await Notification.create({
             userId: p.userId,
@@ -461,7 +461,7 @@ const resolveDispute = async (req, res) => {
           `Ludo cancel dispute resolved — ₹${winnerAmount} prize`,
           balBef, winner.walletBalance, match._id
         );
-        if (io) io.to(`user_${winner._id}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance });
+        if (io) io.to(`user_${winner._id}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance, depositBalance: winner.depositBalance, earningsBalance: winner.earningsBalance });
         const winNotif = await Notification.create({
           userId: winner._id,
           title: 'आप जीत गए!',
@@ -561,7 +561,7 @@ const resolveDispute = async (req, res) => {
               `Ludo cancel dispute resolved — ₹${refundAmount} refunded`,
               balBef, pUser.walletBalance, match._id
             );
-            if (io) io.to(`user_${player.userId}`).emit('wallet:balance-updated', { walletBalance: pUser.walletBalance });
+            if (io) io.to(`user_${player.userId}`).emit('wallet:balance-updated', { walletBalance: pUser.walletBalance, depositBalance: pUser.depositBalance, earningsBalance: pUser.earningsBalance });
           }
         }
 

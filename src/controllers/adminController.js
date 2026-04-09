@@ -324,7 +324,7 @@ const updateUserBalance = async (req, res) => {
     }
 
     const io = req.app.get('io');
-    if (io) io.to(`user_${id}`).emit('wallet:balance-updated', { walletBalance: newBalance });
+    if (io) io.to(`user_${id}`).emit('wallet:balance-updated', { walletBalance: user.walletBalance, depositBalance: user.depositBalance, earningsBalance: user.earningsBalance });
 
     res.json({ message: 'Balance updated successfully', user: { _id: user._id, name: user.name, walletBalance: user.walletBalance } });
   } catch (error) {
@@ -634,7 +634,7 @@ const processWalletRequest = async (req, res) => {
 
     const io = req.app.get('io');
     io.to(`user_${walletRequest.userId}`).emit('notification:new', notification);
-    io.to(`user_${walletRequest.userId}`).emit('wallet:balance-updated', { walletBalance: newBalance });
+    io.to(`user_${walletRequest.userId}`).emit('wallet:balance-updated', { walletBalance: user.walletBalance, depositBalance: user.depositBalance, earningsBalance: user.earningsBalance });
 
     // Push notification to user
     if (user.fcmTokens && user.fcmTokens.length > 0) {
