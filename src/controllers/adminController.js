@@ -14,6 +14,7 @@ const KycRequest = require('../models/KycRequest');
 const { uploadFromBuffer } = require('../config/cloudinary');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 const { sendPushNotification } = require('../config/firebase');
+const { getTodayISTStart, istStartOfDay, istEndOfDay } = require('../utils/istDate');
 
 // ──────────────────────── HELPERS ────────────────────────
 async function getOrCreateSettings() {
@@ -31,20 +32,16 @@ const getDashboardStats = async (req, res) => {
     // Build date filter for period-based stats
     let dateFilter = {};
     if (fromStr && toStr) {
-      // Custom date range
-      const fromDate = new Date(fromStr);
-      const toDate = new Date(toStr);
-      toDate.setHours(23, 59, 59, 999);
-      dateFilter = { createdAt: { $gte: fromDate, $lte: toDate } };
+      // Custom date range — interpret as IST days
+      dateFilter = { createdAt: { $gte: istStartOfDay(fromStr), $lte: istEndOfDay(toStr) } };
     } else if (period && period !== 'all') {
-      const now = new Date();
       let from;
       if (period === 'today') {
-        from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        from = getTodayISTStart();
       } else if (period === '7days') {
-        from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       } else if (period === '30days') {
-        from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       }
       if (from) dateFilter = { createdAt: { $gte: from } };
     }
@@ -156,16 +153,12 @@ const getUsers = async (req, res) => {
       }
     }
     if (fromStr && toStr) {
-      const fromDate = new Date(fromStr);
-      const toDate = new Date(toStr);
-      toDate.setHours(23, 59, 59, 999);
-      filter.createdAt = { $gte: fromDate, $lte: toDate };
+      filter.createdAt = { $gte: istStartOfDay(fromStr), $lte: istEndOfDay(toStr) };
     } else if (period && period !== 'all') {
-      const now = new Date();
       let from;
-      if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      else if (period === '7days') from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      else if (period === '30days') from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      if (period === 'today') from = getTodayISTStart();
+      else if (period === '7days') from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      else if (period === '30days') from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       if (from) filter.createdAt = { $gte: from };
     }
     if (status && ['active', 'inactive', 'blocked'].includes(status)) {
@@ -475,20 +468,14 @@ const getWalletRequests = async (req, res) => {
     if (status) filter.status = status;
     if (type) filter.type = type;
 
-    // Date filtering
+    // Date filtering — all dates interpreted as IST
     if (fromStr && toStr) {
-      const fromDate = new Date(fromStr);
-      const toDate = new Date(toStr);
-      toDate.setHours(23, 59, 59, 999);
-      filter.createdAt = { $gte: fromDate, $lte: toDate };
+      filter.createdAt = { $gte: istStartOfDay(fromStr), $lte: istEndOfDay(toStr) };
     } else if (datePreset) {
-      const now = new Date();
       if (datePreset === 'today') {
-        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        filter.createdAt = { $gte: start };
+        filter.createdAt = { $gte: getTodayISTStart() };
       } else if (datePreset === 'last5') {
-        const start = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
-        filter.createdAt = { $gte: start };
+        filter.createdAt = { $gte: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) };
       }
     }
 
@@ -496,14 +483,8 @@ const getWalletRequests = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pageNum - 1) * limitNum;
 
-    // Build totals filter — exclude rejected, just approved + pending, per type + date
-    const totalsFilter = { status: { $ne: 'rejected' } };
-    if (type) totalsFilter.type = type;
-    if (filter.createdAt) {
-      totalsFilter.createdAt = {};
-      if (filter.createdAt.$gte) totalsFilter.createdAt.$gte = new Date(filter.createdAt.$gte);
-      if (filter.createdAt.$lte) totalsFilter.createdAt.$lte = new Date(filter.createdAt.$lte);
-    }
+    // Totals match the same filters as the main query (status + type + date)
+    const totalsFilter = { ...filter };
 
     const [requests, totalCount, totalAgg] = await Promise.all([
       WalletRequest.find(filter)
@@ -676,17 +657,13 @@ const getAllBets = async (req, res) => {
       filter.userId = { $in: matchingUsers.map((u) => u._id) };
     }
 
-    // Date filtering
+    // Date filtering — all dates interpreted as IST
     if (fromStr && toStr) {
-      const fromDate = new Date(fromStr);
-      const toDate = new Date(toStr);
-      toDate.setHours(23, 59, 59, 999);
-      filter.createdAt = { $gte: fromDate, $lte: toDate };
+      filter.createdAt = { $gte: istStartOfDay(fromStr), $lte: istEndOfDay(toStr) };
     } else if (period && period !== 'all') {
-      const now = new Date();
       let from;
-      if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      else if (period === '7days') from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      if (period === 'today') from = getTodayISTStart();
+      else if (period === '7days') from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       if (from) filter.createdAt = { $gte: from };
     }
 
@@ -730,9 +707,8 @@ const bulkClearBets = async (req, res) => {
     const { from, to, status } = req.body;
     if (!from || !to) return res.status(400).json({ message: 'Date range (from, to) is required' });
 
-    const fromDate = new Date(from);
-    const toDate = new Date(to);
-    toDate.setHours(23, 59, 59, 999);
+    const fromDate = istStartOfDay(from);
+    const toDate = istEndOfDay(to);
 
     const filter = { createdAt: { $gte: fromDate, $lte: toDate } };
     if (status === 'won') filter.status = 'won';
@@ -762,14 +738,8 @@ const getWinningBets = async (req, res) => {
     // Date range filter
     if (startDate || endDate) {
       filter.createdAt = {};
-      if (startDate) {
-        const s = new Date(startDate);
-        if (!isNaN(s.getTime())) { s.setUTCHours(0, 0, 0, 0); filter.createdAt.$gte = s; }
-      }
-      if (endDate) {
-        const e = new Date(endDate);
-        if (!isNaN(e.getTime())) { e.setUTCHours(23, 59, 59, 999); filter.createdAt.$lte = e; }
-      }
+      if (startDate && !isNaN(new Date(startDate).getTime())) filter.createdAt.$gte = istStartOfDay(startDate);
+      if (endDate && !isNaN(new Date(endDate).getTime())) filter.createdAt.$lte = istEndOfDay(endDate);
       if (Object.keys(filter.createdAt).length === 0) delete filter.createdAt;
     }
 
@@ -1058,16 +1028,12 @@ const getSpinnerRecords = async (req, res) => {
       const sDate = startDate || date;
       const eDate = endDate || date;
       if (sDate) {
-        const start = new Date(sDate);
-        if (isNaN(start.getTime())) return res.status(400).json({ message: 'Invalid start date' });
-        start.setUTCHours(0, 0, 0, 0);
-        filter.createdAt = { $gte: start };
+        if (isNaN(new Date(sDate).getTime())) return res.status(400).json({ message: 'Invalid start date' });
+        filter.createdAt = { $gte: istStartOfDay(sDate) };
       }
       if (eDate) {
-        const end = new Date(eDate);
-        if (isNaN(end.getTime())) return res.status(400).json({ message: 'Invalid end date' });
-        end.setUTCHours(23, 59, 59, 999);
-        filter.createdAt = { ...filter.createdAt, $lte: end };
+        if (isNaN(new Date(eDate).getTime())) return res.status(400).json({ message: 'Invalid end date' });
+        filter.createdAt = { ...filter.createdAt, $lte: istEndOfDay(eDate) };
       }
     }
 
@@ -1604,8 +1570,8 @@ const cleanupPhotos = async (req, res) => {
     const { startDate, endDate, photoType } = req.body;
     if (!startDate || !endDate) return res.status(400).json({ message: 'Start and end date required' });
 
-    const s = new Date(startDate); s.setUTCHours(0,0,0,0);
-    const e = new Date(endDate); e.setUTCHours(23,59,59,999);
+    const s = istStartOfDay(startDate);
+    const e = istEndOfDay(endDate);
 
     const { cloudinary } = require('../config/cloudinary');
 
@@ -1755,8 +1721,8 @@ const cleanupLudoMatches = async (req, res) => {
     const { startDate, endDate } = req.body;
     if (!startDate || !endDate) return res.status(400).json({ message: 'Start and end date required' });
 
-    const s = new Date(startDate); s.setUTCHours(0,0,0,0);
-    const e = new Date(endDate); e.setUTCHours(23,59,59,999);
+    const s = istStartOfDay(startDate);
+    const e = istEndOfDay(endDate);
 
     const filter = {
       status: { $in: ['cancelled', 'waiting'] },
@@ -1805,8 +1771,8 @@ const getCleanupPreview = async (req, res) => {
     const { type, startDate, endDate } = req.query;
     if (!startDate || !endDate) return res.status(400).json({ message: 'Dates required' });
 
-    const s = new Date(startDate); s.setUTCHours(0,0,0,0);
-    const e = new Date(endDate); e.setUTCHours(23,59,59,999);
+    const s = istStartOfDay(startDate);
+    const e = istEndOfDay(endDate);
 
     if (type === 'ludo_photos') {
       const sample = await LudoResultRequest.findOne({ createdAt: { $gte: s, $lte: e }, 'claims.screenshotUrl': { $ne: null } }).lean();

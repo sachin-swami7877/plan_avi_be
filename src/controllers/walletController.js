@@ -8,6 +8,7 @@ const AdminSettings = require('../models/AdminSettings');
 const { uploadFromBuffer } = require('../config/cloudinary');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 const { sendPushToAdmins } = require('../config/firebase');
+const { getTodayISTStart } = require('../utils/istDate');
 
 // @desc    Get payment info for deposits (dynamic from AdminSettings)
 // @route   GET /api/wallet/payment-info
@@ -183,13 +184,11 @@ const createWithdrawalRequest = async (req, res) => {
       return res.status(400).json({ message: `Cancel your waiting Ludo match (₹${waitingMatch.entryAmount}) before withdrawing.` });
     }
 
-    // Check daily limit: max 2 withdrawals per day
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // Check daily limit: max 2 withdrawals per day (IST day boundary)
     const todayWithdrawals = await WalletRequest.countDocuments({
       userId: req.user._id,
       type: 'withdrawal',
-      createdAt: { $gte: todayStart },
+      createdAt: { $gte: getTodayISTStart() },
     });
     if (todayWithdrawals >= 2) {
       return res.status(400).json({ message: 'You can only request 2 withdrawals per day.' });

@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const ReferralCommission = require('../models/ReferralCommission');
+const { istStartOfDay, istEndOfDay } = require('../utils/istDate');
 
 // ── USER: Get own referral page data ──────────────────────────────────────────
 // @route GET /api/referral/my
@@ -56,14 +57,8 @@ const getAdminReferrals = async (req, res) => {
     const filter = {};
     if (startDate || endDate) {
       filter.createdAt = {};
-      if (startDate) {
-        const s = new Date(startDate); s.setUTCHours(0, 0, 0, 0);
-        filter.createdAt.$gte = s;
-      }
-      if (endDate) {
-        const e = new Date(endDate); e.setUTCHours(23, 59, 59, 999);
-        filter.createdAt.$lte = e;
-      }
+      if (startDate) filter.createdAt.$gte = istStartOfDay(startDate);
+      if (endDate) filter.createdAt.$lte = istEndOfDay(endDate);
     }
 
     const [rows, totalCount] = await Promise.all([
