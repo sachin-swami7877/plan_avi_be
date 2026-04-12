@@ -7,6 +7,8 @@ const adminSettingsSchema = new mongoose.Schema({
     unique: true,
     default: 'main',
   },
+  // App Logo
+  logoUrl: { type: String, default: null },
   // Payment QR & UPI
   qrCodeUrl: { type: String, default: null },
   upiId: { type: String, default: null },

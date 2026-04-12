@@ -30,6 +30,7 @@ const walletTransactionSchema = new mongoose.Schema(
         'bonus',             // bonus claimed (credit)
         'admin_credit',      // admin manually added balance (credit)
         'admin_debit',       // admin manually subtracted balance (debit)
+        'referral_commission', // referral commission earned (credit)
       ],
       required: true,
     },
@@ -53,6 +54,12 @@ const walletTransactionSchema = new mongoose.Schema(
     // Optional reference to related document (matchId, requestId, etc.)
     refId: {
       type: String,
+      default: null,
+    },
+    // Admin who performed admin_credit / admin_debit (optional)
+    adminId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
       default: null,
     },
   },

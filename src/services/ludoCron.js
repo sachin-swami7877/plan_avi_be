@@ -22,33 +22,12 @@ async function expireWaitingMatches(io) {
     );
     if (!match) continue; // Already processed by another path
 
-    const creator = await User.findById(match.creatorId);
-    if (creator) {
-      const creatorPlayer = match.players.find(p => p.userId.toString() === creator._id.toString());
-      const refundAmt = match.entryAmount;
-      const paidDep = creatorPlayer?.paidFromDeposit || 0;
-      const paidEarn = creatorPlayer?.paidFromEarnings || 0;
-      const total = paidDep + paidEarn;
-      const refundToDeposit = total > 0 ? Math.round((paidDep / total) * refundAmt * 100) / 100 : refundAmt;
-      const refundToEarnings = refundAmt - refundToDeposit;
-      const balBef = creator.walletBalance;
-      await User.updateOne(
-        { _id: creator._id },
-        { $inc: { walletBalance: refundAmt, depositBalance: refundToDeposit, earningsBalance: refundToEarnings } }
-      );
-      await recordWalletTx(
-        creator._id, 'credit', 'ludo_refund', refundAmt,
-        `Ludo match expired (no opponent) — ₹${refundAmt} refunded`,
-        balBef, balBef + refundAmt, match._id
-      );
-    }
-
-    // Notify creator about expiry + refund
+    // No refund needed — balance was never deducted at create time
     await Notification.create({
       userId: match.creatorId,
       type: 'ludo',
       title: 'Ludo Match Expired',
-      message: `No opponent joined your ₹${match.entryAmount} match. ₹${match.entryAmount} refunded to your wallet.`,
+      message: `No opponent joined your ₹${match.entryAmount} match. It has been cancelled.`,
     });
 
     console.log(`[Ludo Cron] Expired waiting match ${match._id}, refunded creator`);

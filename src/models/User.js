@@ -120,9 +120,37 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null,
     select: false
-  }
+  },
+  // Referral system
+  referralCode: {
+    type: String,
+    unique: true,
+    sparse: true,
+    uppercase: true,
+    index: true,
+  },
+  referredBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
 }, {
   timestamps: true
+});
+
+// Auto-generate unique referral code on first save
+userSchema.pre('save', async function (next) {
+  if (!this.referralCode) {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code, exists;
+    do {
+      code = '';
+      for (let i = 0; i < 7; i++) code += chars[Math.floor(Math.random() * chars.length)];
+      exists = await this.constructor.findOne({ referralCode: code });
+    } while (exists);
+    this.referralCode = code;
+  }
+  next();
 });
 
 // Keep role and isAdmin/isSubAdmin/isSuperAdmin in sync

@@ -2,6 +2,7 @@ const sharp = require('sharp');
 const WalletRequest = require('../models/WalletRequest');
 const WalletTransaction = require('../models/WalletTransaction');
 const User = require('../models/User');
+const LudoMatch = require('../models/LudoMatch');
 const Notification = require('../models/Notification');
 const AdminSettings = require('../models/AdminSettings');
 const { uploadFromBuffer } = require('../config/cloudinary');
@@ -166,15 +167,20 @@ const createWithdrawalRequest = async (req, res) => {
       return res.status(400).json({ message: 'Minimum withdrawal amount is Rs. 100' });
     }
 
-    const user = await User.findById(req.user._id);
-
-    // Users can only withdraw earnings
-    const earnings = user.earningsBalance || 0;
+    // Quick pre-check (non-atomic) for readable error messages
+    const userCheck = await User.findById(req.user._id).select('walletBalance earningsBalance');
+    const earnings = userCheck?.earningsBalance || 0;
     if (amount > earnings) {
       return res.status(400).json({ message: `You can only withdraw your earnings. Withdrawable: ₹${earnings.toFixed(2)}` });
     }
-    if (user.walletBalance < amount) {
+    if ((userCheck?.walletBalance || 0) < amount) {
       return res.status(400).json({ message: 'Insufficient balance' });
+    }
+
+    // Block withdrawal if user has a waiting Ludo match (balance not yet deducted)
+    const waitingMatch = await LudoMatch.findOne({ creatorId: req.user._id, status: 'waiting' });
+    if (waitingMatch) {
+      return res.status(400).json({ message: `Cancel your waiting Ludo match (₹${waitingMatch.entryAmount}) before withdrawing.` });
     }
 
     // Check daily limit: max 2 withdrawals per day
@@ -189,10 +195,22 @@ const createWithdrawalRequest = async (req, res) => {
       return res.status(400).json({ message: 'You can only request 2 withdrawals per day.' });
     }
 
-    // Deduct balance immediately (earnings first for withdrawals)
-    const balBefore = user.walletBalance;
-    user.smartDeductWithdrawal(amount);
-    await user.save();
+    // Atomic deduction — prevents race condition (double-tap / concurrent requests).
+    // Since we already verified earningsBalance >= amount above, withdrawal always
+    // comes from earnings. One atomic op: only ONE concurrent request can win.
+    const balBefore = userCheck.walletBalance;
+    const user = await User.findOneAndUpdate(
+      {
+        _id: req.user._id,
+        earningsBalance: { $gte: amount },
+        walletBalance: { $gte: amount },
+      },
+      { $inc: { earningsBalance: -amount, walletBalance: -amount } },
+      { new: true, runValidators: false }
+    );
+    if (!user) {
+      return res.status(400).json({ message: 'Insufficient balance. Please refresh and try again.' });
+    }
 
     const walletRequest = await WalletRequest.create({
       userId: req.user._id,

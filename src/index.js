@@ -15,6 +15,7 @@ const notificationRoutes = require('./routes/notification');
 const bonusRoutes = require('./routes/bonus');
 const settingsRoutes = require('./routes/settings');
 const ludoRoutes = require('./routes/ludo');
+const referralRoutes = require('./routes/referral');
 const { initSocket } = require('./socket');
 const { GameEngine } = require('./services/gameEngine');
 const { startCleanupCron } = require('./services/cleanupEmptyRounds');
@@ -66,6 +67,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/bonus', bonusRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/ludo', ludoRoutes);
+app.use('/api/referral', referralRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

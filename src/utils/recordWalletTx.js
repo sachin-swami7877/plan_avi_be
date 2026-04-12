@@ -11,8 +11,9 @@ const WalletTransaction = require('../models/WalletTransaction');
  * @param {number} balanceBefore
  * @param {number} balanceAfter
  * @param {string|null} refId  - optional reference (matchId, requestId, betId…)
+ * @param {string|null} adminId - admin who performed the action (for admin_credit/admin_debit)
  */
-async function recordWalletTx(userId, type, category, amount, description, balanceBefore, balanceAfter, refId = null) {
+async function recordWalletTx(userId, type, category, amount, description, balanceBefore, balanceAfter, refId = null, adminId = null) {
   try {
     await WalletTransaction.create({
       userId,
@@ -23,6 +24,7 @@ async function recordWalletTx(userId, type, category, amount, description, balan
       balanceBefore,
       balanceAfter,
       refId: refId ? String(refId) : null,
+      adminId: adminId || null,
     });
   } catch (err) {
     console.error('[WalletTx] Failed to record transaction:', err.message);

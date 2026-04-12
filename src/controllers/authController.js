@@ -360,6 +360,16 @@ const setUsername = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     user.name = name;
+
+    // Apply referral code if provided and not already set
+    const refCode = typeof req.body.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : '';
+    if (refCode && !user.referredBy) {
+      const referrer = await User.findOne({ referralCode: refCode });
+      if (referrer && referrer._id.toString() !== user._id.toString()) {
+        user.referredBy = referrer._id;
+      }
+    }
+
     await user.save();
 
     res.json({
@@ -386,7 +396,7 @@ const updateProfile = async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const { name, phone, upiId, upiNumber, bankAccountNumber, bankIfscCode, bankAccountHolder } = req.body;
+    const { name, phone, upiId, upiNumber, bankAccountNumber, bankIfscCode, bankAccountHolder, referralCode } = req.body;
     if (name !== undefined) {
       const trimmedName = String(name).trim();
       if (trimmedName.length < 3) return res.status(400).json({ message: 'Name must be at least 3 characters' });
@@ -399,6 +409,15 @@ const updateProfile = async (req, res) => {
     if (bankAccountNumber !== undefined) user.bankAccountNumber = String(bankAccountNumber).trim() || null;
     if (bankIfscCode !== undefined) user.bankIfscCode = String(bankIfscCode).trim().toUpperCase() || null;
     if (bankAccountHolder !== undefined) user.bankAccountHolder = String(bankAccountHolder).trim() || null;
+
+    // Apply referral code if provided and not already set
+    if (referralCode && !user.referredBy) {
+      const refCode = String(referralCode).trim().toUpperCase();
+      const referrer = await User.findOne({ referralCode: refCode });
+      if (referrer && referrer._id.toString() !== user._id.toString()) {
+        user.referredBy = referrer._id;
+      }
+    }
 
     await user.save();
 
@@ -429,6 +448,10 @@ const updateProfile = async (req, res) => {
 const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('-otp -otpExpiry');
+    // Auto-generate referral code for existing users who don't have one
+    if (user && !user.referralCode) {
+      await user.save(); // pre-save hook assigns the code
+    }
     res.json(user);
   } catch (error) {
     console.error(error);

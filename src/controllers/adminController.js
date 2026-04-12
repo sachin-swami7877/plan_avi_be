@@ -319,7 +319,7 @@ const updateUserBalance = async (req, res) => {
       await recordWalletTx(
         id, txType, txType === 'credit' ? 'admin_credit' : 'admin_debit', txAmt,
         `Admin ${operation === 'add' ? 'added' : operation === 'subtract' ? 'subtracted' : 'set'} ₹${amount}`,
-        balBefore, newBalance
+        balBefore, newBalance, null, req.user._id
       );
     }
 
@@ -1119,6 +1119,7 @@ const getSettings = async (req, res) => {
     }
     res.json({
       betsEnabled: dbBetsEnabled,
+      logoUrl: settings.logoUrl || null,
       qrCodeUrl: settings.qrCodeUrl,
       upiId: settings.upiId,
       upiNumber: settings.upiNumber,
@@ -1248,6 +1249,42 @@ const uploadQrCode = async (req, res) => {
     await settings.save();
 
     res.json({ message: 'QR code uploaded', qrCodeUrl: url });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const uploadLogo = async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ message: 'Logo image is required' });
+    }
+
+    const compressedBuffer = await sharp(req.file.buffer)
+      .resize({ width: 400, withoutEnlargement: true })
+      .png({ quality: 85 })
+      .toBuffer();
+
+    const url = await uploadFromBuffer(compressedBuffer, 'lean_aviator/logo', 'image/png');
+
+    const settings = await getOrCreateSettings();
+    settings.logoUrl = url;
+    await settings.save();
+
+    res.json({ message: 'Logo uploaded', logoUrl: url });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Get current logo (public)
+// @route   GET /api/settings/logo
+const getPublicLogo = async (req, res) => {
+  try {
+    const s = await getOrCreateSettings();
+    res.json({ logoUrl: s.logoUrl || null });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -1835,6 +1872,7 @@ const getAdminCreditLog = async (req, res) => {
     const [records, totalCount] = await Promise.all([
       WalletTransaction.find(filter)
         .populate('userId', 'name phone')
+        .populate('adminId', 'name phone')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
@@ -1886,6 +1924,7 @@ module.exports = {
   getSettings,
   updateSettings,
   uploadQrCode,
+  uploadLogo,
   getBonusRecords,
   getUserDetail,
   getUserTransactions,
@@ -1895,6 +1934,7 @@ module.exports = {
   getPublicUserWarning,
   getPublicLandingStats,
   getPublicAviatorStatus,
+  getPublicLogo,
   getLudoProfit,
   getAviatorProfit,
   cleanupPhotos,

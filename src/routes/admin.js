@@ -33,6 +33,7 @@ const {
   getSettings,
   updateSettings,
   uploadQrCode,
+  uploadLogo,
   getBonusRecords,
   getPendingCounts,
   getLudoProfit,
@@ -43,6 +44,7 @@ const {
   exportUsers,
   getAdminCreditLog,
 } = require('../controllers/adminController');
+const { getAdminReferrals } = require('../controllers/referralController');
 const {
   getAllLudoMatches,
   getLudoMatchDetail,
@@ -100,6 +102,7 @@ router.get('/spinner-records', getSpinnerRecords);
 router.get('/settings', fullAdminOnly, getSettings);
 router.put('/settings', fullAdminOnly, updateSettings);
 router.post('/settings/qr', fullAdminOnly, upload.single('qrCode'), uploadQrCode);
+router.post('/settings/logo', fullAdminOnly, upload.single('logo'), uploadLogo);
 router.get('/bonus-records', getBonusRecords);
 
 // Export
@@ -107,6 +110,9 @@ router.get('/export/users', fullAdminOnly, exportUsers);
 
 // Admin Credit/Debit Log (super admin only — fullAdminOnly allows admin+superadmin)
 router.get('/credit-log', fullAdminOnly, getAdminCreditLog);
+
+// Referrals
+router.get('/referrals', fullAdminOnly, getAdminReferrals);
 
 // Profit
 router.get('/profit/ludo', fullAdminOnly, getLudoProfit);

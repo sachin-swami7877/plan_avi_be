@@ -3,6 +3,7 @@ const LudoMatch = require('../models/LudoMatch');
 const LudoResultRequest = require('../models/LudoResultRequest');
 const { calcLudoCommission } = require('../utils/ludoCommission');
 const { recordWalletTx } = require('../utils/recordWalletTx');
+const { creditReferralCommission } = require('../utils/creditReferralCommission');
 const { sendPushNotification } = require('../config/firebase');
 
 // @desc    All Ludo matches (with filters); live matches with pending result request get hasPendingRequest: true
@@ -162,12 +163,15 @@ const approveLudoResultRequest = async (req, res) => {
       balBeforeWin, winner.walletBalance, match._id
     );
 
+    const io = req.app.get('io');
+    // Referral commission — 2% of bet amount (entryAmount) to referrer
+    await creditReferralCommission(winnerId, match.entryAmount, match._id, 'ludo', io);
+
     match.status = 'completed';
     match.winnerId = winnerId;
     await match.save();
 
     const Notification = require('../models/Notification');
-    const io = req.app.get('io');
 
     // Notify winner
     const winnerNotif = await Notification.create({
@@ -320,7 +324,9 @@ const updateLudoMatchStatus = async (req, res) => {
       for (const p of match.players) {
         const u = await User.findById(p.userId);
         if (u) {
-          if (shouldRefund) {
+          // Only refund if player actually paid (waiting matches have amountPaid=0)
+          const actuallyPaid = (p.amountPaid || 0) > 0;
+          if (shouldRefund && actuallyPaid) {
             const balBef = u.walletBalance;
             u.smartRefund(p.amountPaid, p.paidFromDeposit, p.paidFromEarnings);
             await u.save();
@@ -334,19 +340,18 @@ const updateLudoMatchStatus = async (req, res) => {
           const notif = await Notification.create({
             userId: p.userId,
             title: 'Match Admin Cancelled',
-            message: shouldRefund
+            message: (shouldRefund && actuallyPaid)
               ? `Admin ने match cancel कर दिया। ₹${p.amountPaid} आपके wallet में वापस कर दिया गया।`
-              : `Admin ने match cancel कर दिया। कोई refund नहीं मिलेगा।`,
+              : `Admin ने match cancel कर दिया।`,
             type: 'game',
           });
           if (io) io.to(`user_${p.userId}`).emit('notification:new', notif);
-          // Push notification
           if (u.fcmTokens?.length > 0) {
             sendPushNotification(u._id, u.fcmTokens,
               'Ludo Match Cancelled',
-              shouldRefund
+              (shouldRefund && actuallyPaid)
                 ? `Admin ne match cancel kiya. Rs.${p.amountPaid} aapke wallet mein wapas.`
-                : 'Admin ne match cancel kiya. Koi refund nahi milega.',
+                : 'Admin ne match cancel kiya.',
               { type: 'ludo_cancel' }
             );
           }
@@ -377,6 +382,8 @@ const updateLudoMatchStatus = async (req, res) => {
         `Ludo match won (admin) — ₹${winnerAmount} prize`,
         balBef2, winner.walletBalance, match._id
       );
+      const io2 = req.app.get('io');
+      await creditReferralCommission(winnerId, match.entryAmount, match._id, 'ludo', io2);
       match.status = 'completed';
       match.winnerId = winnerId;
       await match.save();
@@ -461,6 +468,7 @@ const resolveDispute = async (req, res) => {
           `Ludo cancel dispute resolved — ₹${winnerAmount} prize`,
           balBef, winner.walletBalance, match._id
         );
+        await creditReferralCommission(winner._id, match.entryAmount, match._id, 'ludo', io);
         if (io) io.to(`user_${winner._id}`).emit('wallet:balance-updated', { walletBalance: winner.walletBalance, depositBalance: winner.depositBalance, earningsBalance: winner.earningsBalance });
         const winNotif = await Notification.create({
           userId: winner._id,
