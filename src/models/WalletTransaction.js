@@ -31,6 +31,8 @@ const walletTransactionSchema = new mongoose.Schema(
         'admin_credit',      // admin manually added balance (credit)
         'admin_debit',       // admin manually subtracted balance (debit)
         'referral_commission', // referral commission earned (credit)
+        'referral_redemption', // user redeemed pending referral commission (credit to deposit)
+        'referral_adjust',     // admin adjusted a referral commission amount
       ],
       required: true,
     },

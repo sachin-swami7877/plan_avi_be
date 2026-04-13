@@ -44,7 +44,7 @@ const {
   exportUsers,
   getAdminCreditLog,
 } = require('../controllers/adminController');
-const { getAdminReferrals } = require('../controllers/referralController');
+const { getAdminReferrals, adjustCommission } = require('../controllers/referralController');
 const {
   getAllLudoMatches,
   getLudoMatchDetail,
@@ -113,6 +113,7 @@ router.get('/credit-log', fullAdminOnly, getAdminCreditLog);
 
 // Referrals
 router.get('/referrals', fullAdminOnly, getAdminReferrals);
+router.put('/referrals/:id/adjust', fullAdminOnly, adjustCommission);
 
 // Profit
 router.get('/profit/ludo', fullAdminOnly, getLudoProfit);

@@ -1373,16 +1373,30 @@ const getPublicAviatorStatus = async (req, res) => {
 const getUserDetail = async (req, res) => {
   try {
     const { id } = req.params;
-    const [user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest] = await Promise.all([
+
+    // Build admin transactions filter — exclude superadmin credits for non-superadmin viewers
+    const adminTxFilter = { userId: id, category: { $in: ['admin_credit', 'admin_debit'] } };
+    if (req.user.role !== 'superadmin') {
+      const superadminIds = await User.find({ role: 'superadmin' }).select('_id').lean();
+      const superadminIdList = superadminIds.map(u => u._id);
+      if (superadminIdList.length > 0) adminTxFilter.adminId = { $nin: superadminIdList };
+    }
+
+    const [user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest, adminTransactions] = await Promise.all([
       User.findById(id).select('-otp -otpExpiry'),
       WalletRequest.find({ userId: id }).sort({ createdAt: -1 }).limit(100),
       Bet.find({ userId: id }).sort({ createdAt: -1 }).limit(100),
       LudoMatch.find({ $or: [{ creatorId: id }, { 'players.userId': id }] }).sort({ createdAt: -1 }).limit(100),
       SpinnerRecord.find({ userId: id }).sort({ createdAt: -1 }).limit(100),
       KycRequest.findOne({ userId: id }).lean(),
+      WalletTransaction.find(adminTxFilter)
+        .populate('adminId', 'name role')
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean(),
     ]);
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest: kycRequest || null });
+    res.json({ user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest: kycRequest || null, adminTransactions });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -1834,6 +1848,15 @@ const getAdminCreditLog = async (req, res) => {
     const skip = (pageNum - 1) * limitNum;
 
     const filter = { category: { $in: ['admin_credit', 'admin_debit'] } };
+
+    // Non-superadmin admins can only see records created by non-superadmin admins
+    if (req.user.role !== 'superadmin') {
+      const superadminIds = await User.find({ role: 'superadmin' }).select('_id').lean();
+      const superadminIdList = superadminIds.map(u => u._id);
+      if (superadminIdList.length > 0) {
+        filter.adminId = { $nin: superadminIdList };
+      }
+    }
 
     const [records, totalCount] = await Promise.all([
       WalletTransaction.find(filter)
