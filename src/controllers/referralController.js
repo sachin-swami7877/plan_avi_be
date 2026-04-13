@@ -35,7 +35,17 @@ const getMyReferral = async (req, res) => {
     const redeemedAmount = commissions
       .filter(c => c.status === 'redeemed')
       .reduce((s, c) => s + c.commissionAmount, 0);
-    const referredCount = await User.countDocuments({ referredBy: req.user._id });
+    // Fetch ALL referred users (even those who haven't played yet)
+    const allReferredUsers = await User.find({ referredBy: req.user._id })
+      .select('name phone createdAt')
+      .lean();
+    const referredCount = allReferredUsers.length;
+
+    // Merge commission data into each referred user
+    const referredUsers = allReferredUsers.map(u => {
+      const uid = u._id.toString();
+      return groupMap[uid] || { user: u, commissions: [], totalEarned: 0 };
+    });
 
     res.json({
       referralCode: user.referralCode,
@@ -43,7 +53,7 @@ const getMyReferral = async (req, res) => {
       pendingAmount: Math.round(pendingAmount * 100) / 100,
       redeemedAmount: Math.round(redeemedAmount * 100) / 100,
       referredCount,
-      referredUsers: Object.values(groupMap),
+      referredUsers,
     });
   } catch (err) {
     console.error(err);
