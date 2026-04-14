@@ -1374,13 +1374,8 @@ const getUserDetail = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Build admin transactions filter — exclude superadmin credits for non-superadmin viewers
+    // All admins (including non-superadmin) can see all admin credit/debit transactions
     const adminTxFilter = { userId: id, category: { $in: ['admin_credit', 'admin_debit'] } };
-    if (req.user.role !== 'superadmin') {
-      const superadminIds = await User.find({ role: 'superadmin' }).select('_id').lean();
-      const superadminIdList = superadminIds.map(u => u._id);
-      if (superadminIdList.length > 0) adminTxFilter.adminId = { $nin: superadminIdList };
-    }
 
     const [user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest, adminTransactions] = await Promise.all([
       User.findById(id).select('-otp -otpExpiry'),

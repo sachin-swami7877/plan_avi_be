@@ -24,7 +24,7 @@ const referralCommissionSchema = new mongoose.Schema(
       default: 'ludo',
     },
     betAmount: { type: Number, required: true },   // entry fee (bet) — commission is % of this
-    commissionPct: { type: Number, default: 2 },
+    commissionPct: { type: Number, default: 3 },
     commissionAmount: { type: Number, required: true },
     status: { type: String, enum: ['pending', 'redeemed'], default: 'pending', index: true },
     redeemedAt: { type: Date, default: null },

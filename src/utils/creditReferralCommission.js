@@ -1,11 +1,11 @@
 const User = require('../models/User');
 const ReferralCommission = require('../models/ReferralCommission');
 
-const COMMISSION_PCT = 2;
+const COMMISSION_PCT = 3;
 
 /**
  * Records a PENDING referral commission when User B (who used A's code) wins.
- * Commission = 2% of betAmount (entry fee).
+ * Commission = 3% of betAmount (entry fee).
  * The amount is NOT added to wallet yet — user must redeem it manually.
  * Non-fatal — logs errors but never throws.
  */
