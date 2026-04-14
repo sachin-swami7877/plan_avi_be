@@ -9,7 +9,7 @@ const COMMISSION_PCT = 3;
  * The amount is NOT added to wallet yet — user must redeem it manually.
  * Non-fatal — logs errors but never throws.
  */
-async function creditReferralCommission(winnerId, betAmount, matchId, matchType) {
+async function creditReferralCommission(winnerId, betAmount, matchId, matchType, io) {
   try {
     const winner = await User.findById(winnerId).select('referredBy name');
     if (!winner?.referredBy) return;
@@ -30,6 +30,14 @@ async function creditReferralCommission(winnerId, betAmount, matchId, matchType)
       commissionAmount,
       status: 'pending',
     });
+
+    // Real-time update — notify referrer's header instantly
+    if (io) {
+      // Fetch updated total for referrer
+      const allComms = await ReferralCommission.find({ referrerId: referrer._id }).lean();
+      const totalEarned = Math.round(allComms.reduce((s, c) => s + c.commissionAmount, 0) * 100) / 100;
+      io.to(`user_${referrer._id}`).emit('referral:commission-updated', { totalEarned });
+    }
 
     console.log(`[Referral] ₹${commissionAmount} pending for ${referrer.name} — ${winner.name}'s ₹${betAmount} win`);
   } catch (err) {

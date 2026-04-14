@@ -1374,8 +1374,13 @@ const getUserDetail = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // All admins (including non-superadmin) can see all admin credit/debit transactions
+    // Regular admins cannot see admin_credit/debit done by superadmin
     const adminTxFilter = { userId: id, category: { $in: ['admin_credit', 'admin_debit'] } };
+    if (req.user.role !== 'superadmin') {
+      const superadminIds = await User.find({ role: 'superadmin' }).select('_id').lean();
+      const superadminIdList = superadminIds.map(u => u._id);
+      if (superadminIdList.length > 0) adminTxFilter.adminId = { $nin: superadminIdList };
+    }
 
     const [user, walletRequests, aviatorBets, ludoMatches, spinnerRecords, kycRequest, adminTransactions] = await Promise.all([
       User.findById(id).select('-otp -otpExpiry'),
@@ -1409,6 +1414,21 @@ const getUserTransactions = async (req, res) => {
     const skip = (pageNum - 1) * limitNum;
 
     const filter = { userId: id };
+
+    // Non-superadmin admins cannot see admin_credit/debit done by superadmin
+    if (req.user.role !== 'superadmin') {
+      const superadminIds = await User.find({ role: 'superadmin' }).select('_id').lean();
+      const superadminIdList = superadminIds.map(u => u._id);
+      if (superadminIdList.length > 0) {
+        filter.$nor = [
+          {
+            category: { $in: ['admin_credit', 'admin_debit'] },
+            adminId: { $in: superadminIdList },
+          },
+        ];
+      }
+    }
+
     const [transactions, totalCount] = await Promise.all([
       WalletTransaction.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       WalletTransaction.countDocuments(filter),
