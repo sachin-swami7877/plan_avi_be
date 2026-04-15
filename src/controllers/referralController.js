@@ -267,4 +267,110 @@ const adjustCommission = async (req, res) => {
   }
 };
 
-module.exports = { getMyReferral, redeemCommission, getAdminReferrals, adjustCommission };
+// ── ADMIN: All referred users grouped by referrer (even zero-commission) ────────
+// @route GET /api/admin/referrals/all-referred
+const getAdminAllReferredUsers = async (req, res) => {
+  try {
+    const { page = 1, limit = 50, search = '' } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    // Today range in IST
+    const now = new Date();
+    const istNow = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+    const todayStr = istNow.toISOString().slice(0, 10);
+    const todayStart = istStartOfDay(todayStr);
+    const todayEnd = istEndOfDay(todayStr);
+
+    // All users who were referred (have referredBy set)
+    const referredUsers = await User.find(
+      { referredBy: { $exists: true, $ne: null } }
+    ).select('name phone referredBy createdAt').lean();
+
+    // Group by referredBy (referrerId string)
+    const referrerMap = {};
+    for (const u of referredUsers) {
+      const rid = u.referredBy.toString();
+      if (!referrerMap[rid]) referrerMap[rid] = [];
+      referrerMap[rid].push(u);
+    }
+    const referrerIds = Object.keys(referrerMap);
+
+    // Search / paginate referrers
+    const searchFilter = { _id: { $in: referrerIds } };
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), 'i');
+      searchFilter.$or = [{ name: regex }, { phone: regex }, { referralCode: regex }];
+    }
+
+    const [totalCount, referrers] = await Promise.all([
+      User.countDocuments(searchFilter),
+      User.find(searchFilter).select('name phone referralCode').skip(skip).limit(limitNum).lean(),
+    ]);
+
+    // Fetch commissions for these referrers only
+    const referrerObjectIds = referrers.map(r => r._id);
+    const commissions = await ReferralCommission.find({
+      referrerId: { $in: referrerObjectIds },
+    }).select('referrerId referredUserId commissionAmount status createdAt').lean();
+
+    // Build commission map: referrerId -> referredUserId -> stats
+    const commissionMap = {};
+    for (const c of commissions) {
+      const rid = c.referrerId.toString();
+      const uid = c.referredUserId.toString();
+      if (!commissionMap[rid]) commissionMap[rid] = {};
+      if (!commissionMap[rid][uid]) commissionMap[rid][uid] = { total: 0, today: 0, redeemed: 0, pending: 0 };
+      commissionMap[rid][uid].total += c.commissionAmount;
+      if (c.createdAt >= todayStart && c.createdAt <= todayEnd) {
+        commissionMap[rid][uid].today += c.commissionAmount;
+      }
+      if (c.status === 'redeemed') commissionMap[rid][uid].redeemed += c.commissionAmount;
+      else commissionMap[rid][uid].pending += c.commissionAmount;
+    }
+
+    const round = (n) => Math.round(n * 100) / 100;
+
+    const result = referrers.map(r => {
+      const rid = r._id.toString();
+      const referred = referrerMap[rid] || [];
+      const rCommMap = commissionMap[rid] || {};
+
+      let totalCommission = 0, todayCommission = 0, totalRedeemed = 0, totalPending = 0;
+
+      const referredWithStats = referred.map(u => {
+        const uid = u._id.toString();
+        const s = rCommMap[uid] || { total: 0, today: 0, redeemed: 0, pending: 0 };
+        totalCommission += s.total;
+        todayCommission += s.today;
+        totalRedeemed += s.redeemed;
+        totalPending += s.pending;
+        return {
+          user: u,
+          totalCommission: round(s.total),
+          todayCommission: round(s.today),
+          redeemed: round(s.redeemed),
+          pending: round(s.pending),
+        };
+      });
+
+      return {
+        referrer: r,
+        referredUsers: referredWithStats,
+        totalReferredCount: referred.length,
+        totalCommission: round(totalCommission),
+        todayCommission: round(todayCommission),
+        redeemed: round(totalRedeemed),
+        pending: round(totalPending),
+      };
+    });
+
+    res.json({ referrers: result, totalCount, page: pageNum, totalPages: Math.ceil(totalCount / limitNum) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+module.exports = { getMyReferral, redeemCommission, getAdminReferrals, adjustCommission, getAdminAllReferredUsers };
