@@ -19,9 +19,9 @@ const getAllLudoMatches = async (req, res) => {
     const isRequestedFilter = status === 'requested';
     if (status && !isRequestedFilter) query.status = status;
 
-    const pendingMatchIds = await LudoResultRequest.find({ status: 'pending' }).distinct('matchId');
-
+    let pendingMatchIds = [];
     if (isRequestedFilter) {
+      pendingMatchIds = await LudoResultRequest.find({ status: 'pending' }).distinct('matchId');
       query.status = { $in: ['live', 'cancel_requested'] };
       if (pendingMatchIds.length > 0) {
         query._id = { $in: pendingMatchIds };
