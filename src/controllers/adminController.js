@@ -58,7 +58,7 @@ const getDashboardStats = async (req, res) => {
     // Bet stats use date filter
     const betFilter = hasPeriodFilter ? dateFilter : {};
 
-    // Aviator bets: only sum profit for WON bets (lost bets have profit=-amount which skews total)
+    // Aviator bets: sum actual payouts for WON bets (amount + profit = winAmount)
     const [totalBets, totalWins, betAgg] = await Promise.all([
       Bet.countDocuments(betFilter),
       Bet.countDocuments({ status: 'won', ...betFilter }),
@@ -67,7 +67,7 @@ const getDashboardStats = async (req, res) => {
         { $group: {
           _id: null,
           totalBetAmount: { $sum: '$amount' },
-          totalWinAmount: { $sum: { $cond: [{ $eq: ['$status', 'won'] }, '$profit', 0] } },
+          totalWinAmount: { $sum: { $cond: [{ $eq: ['$status', 'won'] }, { $add: ['$amount', '$profit'] }, 0] } },
         }},
       ]),
     ]);
