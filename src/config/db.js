@@ -2,7 +2,13 @@ const mongoose = require('mongoose');
 
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect(process.env.MONGODB_URI);
+    const conn = await mongoose.connect(process.env.MONGODB_URI, {
+      maxPoolSize: 15,
+      minPoolSize: 5,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      retryWrites: true,
+    });
     console.log(`MongoDB Connected: ${conn.connection.host}`);
 
     // Drop stale indexes so Mongoose can recreate them with the correct definition
