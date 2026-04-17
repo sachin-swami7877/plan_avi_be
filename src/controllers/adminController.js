@@ -78,18 +78,23 @@ const getDashboardStats = async (req, res) => {
       { $group: { _id: null, totalSpinCost: { $sum: '$spinCost' }, totalSpinWin: { $sum: '$winAmount' } } },
     ]);
 
-    // Ludo: completed matches — pool = sum of players' amountPaid (bet), winnerAmount = pool - commission (calculated on-the-fly)
+    // Ludo: completed matches — calculate commission directly from match data
     const ludoAgg = await LudoMatch.aggregate([
       { $match: { status: 'completed', ...betFilter } },
       { $unwind: '$players' },
       { $group: { _id: null, totalLudoBet: { $sum: '$players.amountPaid' } } },
     ]);
 
-    // Ludo win = total amount credited to winners (we track via WalletTransaction for accuracy)
-    const ludoWinAgg = await WalletTransaction.aggregate([
-      { $match: { category: 'ludo_win', ...betFilter } },
-      { $group: { _id: null, totalLudoWin: { $sum: '$amount' } } },
-    ]);
+    // Ludo win = pool - commission (calculate from match records, not wallet transactions which may fail)
+    const ludoMatches = await LudoMatch.find({ status: 'completed', ...betFilter }).lean();
+    const { calcLudoCommission } = require('../utils/ludoCommission');
+    let totalLudoWin = 0;
+    for (const match of ludoMatches) {
+      const pool = match.players.reduce((s, p) => s + (p.amountPaid || 0), 0);
+      const { winnerAmount } = await calcLudoCommission(pool, match.entryAmount);
+      totalLudoWin += winnerAmount;
+    }
+    const ludoWinAgg = [{ totalLudoWin }];
 
     const aviatorBet = betAgg[0]?.totalBetAmount || 0;
     const aviatorWin = betAgg[0]?.totalWinAmount || 0;
