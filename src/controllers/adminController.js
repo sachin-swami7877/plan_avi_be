@@ -78,22 +78,40 @@ const getDashboardStats = async (req, res) => {
       { $group: { _id: null, totalSpinCost: { $sum: '$spinCost' }, totalSpinWin: { $sum: '$winAmount' } } },
     ]);
 
-    // Ludo: completed matches — calculate commission directly from match data
+    // Ludo: completed matches — pool = sum of players' amountPaid (bet)
     const ludoAgg = await LudoMatch.aggregate([
       { $match: { status: 'completed', ...betFilter } },
       { $unwind: '$players' },
       { $group: { _id: null, totalLudoBet: { $sum: '$players.amountPaid' } } },
     ]);
 
-    // Ludo win = pool - commission (calculate from match records, not wallet transactions which may fail)
-    const ludoMatches = await LudoMatch.find({ status: 'completed', ...betFilter }).lean();
-    const { calcLudoCommission } = require('../utils/ludoCommission');
+    // Ludo commission: Fetch all completed matches with their pools and entry amounts
+    const ludoCommissions = await LudoMatch.aggregate([
+      { $match: { status: 'completed', ...betFilter } },
+      { $project: {
+        pool: { $sum: '$players.amountPaid' },
+        entryAmount: 1,
+      }},
+    ]);
+
+    // Get commission tiers once (not per match)
+    const settings = await AdminSettings.findOne({ key: 'main' }).select('ludoCommTier1Max ludoCommTier1Pct ludoCommTier2Max ludoCommTier2Pct ludoCommTier3Pct').lean();
+    const tier1Max = settings?.ludoCommTier1Max ?? 250;
+    const tier1Pct = settings?.ludoCommTier1Pct ?? 10;
+    const tier2Max = settings?.ludoCommTier2Max ?? 600;
+    const tier2Pct = settings?.ludoCommTier2Pct ?? 8;
+    const tier3Pct = settings?.ludoCommTier3Pct ?? 5;
+
+    // Calculate total win (pool - commission) without extra queries
     let totalLudoWin = 0;
-    for (const match of ludoMatches) {
-      const pool = match.players.reduce((s, p) => s + (p.amountPaid || 0), 0);
-      const { winnerAmount } = await calcLudoCommission(pool, match.entryAmount);
-      totalLudoWin += winnerAmount;
-    }
+    ludoCommissions.forEach(m => {
+      const pool = m.pool;
+      let commission;
+      if (m.entryAmount <= tier1Max) commission = Math.round((pool * tier1Pct) / 100);
+      else if (m.entryAmount <= tier2Max) commission = Math.round((pool * tier2Pct) / 100);
+      else commission = Math.round((pool * tier3Pct) / 100);
+      totalLudoWin += pool - commission;
+    });
     const ludoWinAgg = [{ totalLudoWin }];
 
     const aviatorBet = betAgg[0]?.totalBetAmount || 0;
