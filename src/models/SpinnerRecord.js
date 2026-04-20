@@ -9,7 +9,12 @@ const spinnerRecordSchema = new mongoose.Schema({
   outcome: {
     type: String,
     required: true,
-    enum: ['thank_you', '50', '70', '100', '120', '170', '200'],
+    enum: ['thank_you', '20', '50', '70', '100', '120', '170', '200'],
+  },
+  spinType: {
+    type: String,
+    enum: ['paid', 'referral'],
+    default: 'paid',
   },
   winAmount: {
     type: Number,

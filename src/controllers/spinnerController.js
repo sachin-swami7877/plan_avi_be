@@ -4,25 +4,33 @@ const { recordWalletTx } = require('../utils/recordWalletTx');
 
 const VALID_SPIN_COSTS = [50, 100];
 
-// ₹50 spin outcomes: thank_you 53%, ₹50 17%, ₹70 13%, ₹100 10%, ₹120 3%
-// Expected payout = 31.2, profit = ₹18.8 (37.6%)
+// Paid ₹50 spin outcomes
 const OUTCOMES_50 = [
   { value: 'thank_you', weight: 53 },
+  { value: '20', weight: 17 },
   { value: '50', weight: 17 },
-  { value: '70', weight: 13 },
   { value: '100', weight: 10 },
   { value: '120', weight: 3 },
 ];
 
-// ₹100 spin outcomes: thank_you 40%, ₹50 14%, ₹100 17%, ₹120 14%, ₹170 10%, ₹200 5%
-// Expected payout = 67.8, profit = ₹32.2 (32.2%)
+// Paid ₹100 spin outcomes
 const OUTCOMES_100 = [
   { value: 'thank_you', weight: 40 },
+  { value: '20', weight: 14 },
   { value: '50', weight: 14 },
   { value: '100', weight: 17 },
-  { value: '120', weight: 14 },
-  { value: '170', weight: 10 },
-  { value: '200', weight: 5 },
+  { value: '120', weight: 10 },
+  { value: '170', weight: 4 },
+  { value: '200', weight: 1 },
+];
+
+// FREE referral spinner outcomes: 60% empty, 22% ₹20, 5% ₹50, 2% ₹100, 1% ₹120
+const OUTCOMES_REFERRAL = [
+  { value: 'thank_you', weight: 60 },
+  { value: '20', weight: 22 },
+  { value: '50', weight: 5 },
+  { value: '100', weight: 2 },
+  { value: '120', weight: 1 },
 ];
 
 // Big win thresholds — if user wins these, force next 1-2 spins to thank_you
@@ -146,6 +154,112 @@ const playSpinner = async (req, res) => {
   }
 };
 
+// @desc    Play referral spinner (free spins from referrals)
+// @route   POST /api/spinner/play-referral
+const playReferralSpinner = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const spinCost = 50;
+    const outcomes = OUTCOMES_REFERRAL;
+
+    if (user.referralSpinsOffered < 1) {
+      return res.status(400).json({ message: 'No referral spins available' });
+    }
+
+    const userKey = `${user._id}_referral`;
+    let outcome;
+
+    const remaining = forcedThankYou.get(userKey) || 0;
+    if (remaining > 0) {
+      outcome = 'thank_you';
+      forcedThankYou.set(userKey, remaining - 1);
+      if (remaining - 1 <= 0) forcedThankYou.delete(userKey);
+    } else {
+      outcome = getWeightedOutcome(outcomes);
+    }
+
+    await new Promise((r) => setTimeout(r, SPIN_ROUND_DELAY_MS));
+    const winAmount = outcome === 'thank_you' ? 0 : Number(outcome);
+
+    const bigWins = ['100', '120', '170', '200'];
+    if (bigWins.includes(outcome)) {
+      const forceCount = Math.random() < 0.5 ? 1 : 2;
+      forcedThankYou.set(userKey, forceCount);
+    }
+
+    const netChange = winAmount;
+    const balBefore = user.walletBalance;
+
+    const updated = await User.findOneAndUpdate(
+      { _id: user._id, referralSpinsOffered: { $gte: 1 } },
+      {
+        $inc: {
+          walletBalance: netChange,
+          earningsBalance: netChange,
+          referralSpinsOffered: -1,
+          referralSpinsRedeemed: 1,
+        }
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(400).json({ message: 'Failed to redeem referral spin' });
+    }
+
+    await SpinnerRecord.create({
+      userId: user._id,
+      outcome,
+      winAmount,
+      spinCost,
+      spinType: 'referral',
+      balanceAfter: updated.walletBalance,
+    });
+
+    if (winAmount > 0) {
+      await recordWalletTx(
+        user._id, 'credit', 'referral_spin_win', winAmount,
+        `Referral spinner win — ₹${winAmount} credited`,
+        balBefore, updated.walletBalance
+      );
+    }
+
+    res.json({
+      outcome,
+      winAmount,
+      newBalance: updated.walletBalance,
+      referralSpinsRemaining: updated.referralSpinsOffered,
+      message: outcome === 'thank_you' ? 'Thank you!' : `You won ₹${winAmount}!`,
+    });
+  } catch (error) {
+    console.error('Referral spinner play error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Get referral spinner status
+// @route   GET /api/spinner/referral-status
+const getReferralStatus = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select(
+      'referralSpinsOffered referralSpinsRedeemed'
+    );
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    res.json({
+      offered: user.referralSpinsOffered || 0,
+      redeemed: user.referralSpinsRedeemed || 0,
+      remaining: Math.floor(user.referralSpinsOffered || 0),
+      fractional: ((user.referralSpinsOffered || 0) % 1).toFixed(1),
+    });
+  } catch (error) {
+    console.error('Referral status error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 // @desc    Get current user's spinner history (with pagination)
 // @route   GET /api/spinner/history?page=1&limit=25
 const getMyHistory = async (req, res) => {
@@ -177,4 +291,4 @@ const getMyHistory = async (req, res) => {
   }
 };
 
-module.exports = { playSpinner, getMyHistory };
+module.exports = { playSpinner, playReferralSpinner, getMyHistory, getReferralStatus };

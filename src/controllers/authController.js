@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { sendOtpSms } = require('../services/smsIndiaHub');
 const { sendPushToAdmins } = require('../config/firebase');
+const { awardReferralSpins } = require('../utils/awardReferralSpins');
 
 // Temporary in-memory store for OTPs of unverified (not yet created) phone users
 // Key: 10-digit phone, Value: { otp, otpExpiry }
@@ -367,10 +368,15 @@ const setUsername = async (req, res) => {
       const referrer = await User.findOne({ referralCode: refCode });
       if (referrer && referrer._id.toString() !== user._id.toString()) {
         user.referredBy = referrer._id;
+        await user.save();
+        // Award spins to referrer
+        await awardReferralSpins(referrer._id, user._id);
+      } else {
+        await user.save();
       }
+    } else {
+      await user.save();
     }
-
-    await user.save();
 
     res.json({
       _id: user._id,
@@ -416,10 +422,15 @@ const updateProfile = async (req, res) => {
       const referrer = await User.findOne({ referralCode: refCode });
       if (referrer && referrer._id.toString() !== user._id.toString()) {
         user.referredBy = referrer._id;
+        await user.save();
+        // Award spins to referrer
+        await awardReferralSpins(referrer._id, user._id);
+      } else {
+        await user.save();
       }
+    } else {
+      await user.save();
     }
-
-    await user.save();
 
     res.json({
       _id: user._id,

@@ -134,6 +134,15 @@ const userSchema = new mongoose.Schema({
     ref: 'User',
     default: null,
   },
+  // Referral spinner system
+  referralSpinsOffered: {
+    type: Number,
+    default: 0,
+  },
+  referralSpinsRedeemed: {
+    type: Number,
+    default: 0,
+  },
 }, {
   timestamps: true
 });
