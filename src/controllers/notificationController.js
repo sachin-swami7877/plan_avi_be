@@ -2,13 +2,7 @@ const Notification = require('../models/Notification');
 const User = require('../models/User');
 const path = require('path');
 const fs = require('fs');
-
-let Expo = null;
-try {
-  Expo = require('expo-server-sdk').Expo;
-} catch (err) {
-  console.warn('expo-server-sdk not installed. Push notifications disabled.');
-}
+const { sendPushNotification } = require('../config/firebase');
 
 // @desc    Get user notifications (last 7 days only)
 // @route   GET /api/notifications?page=1&limit=25
@@ -134,7 +128,7 @@ const removeFcmToken = async (req, res) => {
   }
 };
 
-// @desc    Send web notification to all users (Admin only)
+// @desc    Send push notification to all users (Admin only)
 // @route   POST /api/admin/notifications/send
 const sendAdminNotification = async (req, res) => {
   try {
@@ -143,13 +137,14 @@ const sendAdminNotification = async (req, res) => {
       return res.status(400).json({ message: 'Notification message is required' });
     }
 
-    // Get all active users
+    // Get all active users with FCM tokens
     const users = await User.find({
-      status: 'active'
-    }).select('_id').lean();
+      status: 'active',
+      fcmTokens: { $exists: true, $ne: [] }
+    }).select('_id fcmTokens').lean();
 
     if (users.length === 0) {
-      return res.status(400).json({ message: 'No active users found' });
+      return res.status(400).json({ message: 'No users with push tokens found' });
     }
 
     let imageUrl = null;
@@ -166,7 +161,7 @@ const sendAdminNotification = async (req, res) => {
       imageUrl = `${process.env.API_URL || 'http://localhost:5000'}/uploads/${filename}`;
     }
 
-    // Create notifications for all users
+    // Create notifications for all users (for database/history)
     const notificationDocs = users.map(user => ({
       userId: user._id,
       title: title || 'RushkroLudo',
@@ -180,10 +175,38 @@ const sendAdminNotification = async (req, res) => {
 
     const result = await Notification.insertMany(notificationDocs);
 
+    // Send actual FCM push notifications to all users
+    const allTokens = users.flatMap(user => user.fcmTokens).filter(Boolean);
+    const notifTitle = title || 'RushkroLudo';
+
+    if (allTokens.length > 0) {
+      await sendPushNotification(null, allTokens, notifTitle, message, {
+        type: 'broadcast',
+        imageUrl: imageUrl || '',
+        websiteUrl: websiteUrl || '',
+        link: link || ''
+      });
+    }
+
+    // Also emit Socket.io event for real-time in-app notifications
+    const io = req.app.get('io');
+    if (io) {
+      const notificationData = {
+        _id: result[0]?._id,
+        title: notifTitle,
+        message,
+        imageUrl,
+        websiteUrl: websiteUrl || null,
+        type: 'broadcast',
+        createdAt: new Date()
+      };
+      io.emit('notification:broadcast', notificationData);
+    }
+
     res.json({
-      message: `Notification sent to ${result.length} users`,
+      message: `Notification sent to ${allTokens.length} devices`,
       userCount: users.length,
-      sentCount: result.length,
+      sentCount: allTokens.length,
       notificationId: result[0]?._id
     });
   } catch (error) {
