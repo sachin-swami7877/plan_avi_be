@@ -1,5 +1,8 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User');
+const { Expo } = require('expo-server-sdk');
+const path = require('path');
+const fs = require('fs');
 
 // @desc    Get user notifications (last 7 days only)
 // @route   GET /api/notifications?page=1&limit=25
@@ -125,6 +128,100 @@ const removeFcmToken = async (req, res) => {
   }
 };
 
+// @desc    Send push notification to all users (Admin only)
+// @route   POST /api/admin/notifications/send
+const sendAdminNotification = async (req, res) => {
+  try {
+    const { title, message, link, websiteUrl } = req.body;
+    if (!message) {
+      return res.status(400).json({ message: 'Notification message is required' });
+    }
+
+    // Get all users with FCM tokens
+    const users = await User.find({
+      fcmTokens: { $exists: true, $ne: [] },
+      status: 'active'
+    }).select('fcmTokens').lean();
+
+    if (users.length === 0) {
+      return res.status(400).json({ message: 'No users with push tokens found' });
+    }
+
+    const expo = new Expo();
+    const messages = [];
+    let imageUrl = null;
+
+    // Handle image upload if provided
+    if (req.file) {
+      const uploadDir = path.join(__dirname, '../../public/uploads');
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      const filename = `notification-${Date.now()}-${req.file.originalname}`;
+      const filepath = path.join(uploadDir, filename);
+      fs.writeFileSync(filepath, req.file.buffer);
+      imageUrl = `${process.env.API_URL || 'http://localhost:5000'}/uploads/${filename}`;
+    }
+
+    // Build messages for each token
+    const messageData = {};
+    if (websiteUrl) {
+      messageData.url = websiteUrl;
+      messageData.type = 'external';
+    } else if (link) {
+      messageData.url = link;
+      messageData.type = 'internal';
+    } else {
+      messageData.url = '/';
+      messageData.type = 'internal';
+    }
+
+    users.forEach(user => {
+      user.fcmTokens.forEach(token => {
+        if (Expo.isExpoPushToken(token)) {
+          messages.push({
+            to: token,
+            sound: 'default',
+            title: title || 'RushkroLudo',
+            body: message,
+            data: messageData,
+            ...(imageUrl && { bigPictureUrl: imageUrl })
+          });
+        }
+      });
+    });
+
+    if (messages.length === 0) {
+      return res.status(400).json({ message: 'No valid Expo push tokens found' });
+    }
+
+    // Send notifications in chunks (Expo limits to 100 at a time)
+    const chunks = [];
+    for (let i = 0; i < messages.length; i += 100) {
+      chunks.push(messages.slice(i, i + 100));
+    }
+
+    let totalSent = 0;
+    for (const chunk of chunks) {
+      try {
+        const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+        totalSent += ticketChunk.length;
+      } catch (error) {
+        console.error('Expo error:', error);
+      }
+    }
+
+    res.json({
+      message: `Notification sent to ${totalSent} users`,
+      userCount: users.length,
+      sentCount: totalSent
+    });
+  } catch (error) {
+    console.error('Send notification error:', error);
+    res.status(500).json({ message: 'Failed to send notification' });
+  }
+};
+
 module.exports = {
   getNotifications,
   markAsRead,
@@ -132,4 +229,5 @@ module.exports = {
   getUnreadCount,
   saveFcmToken,
   removeFcmToken,
+  sendAdminNotification,
 };

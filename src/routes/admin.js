@@ -58,6 +58,7 @@ const {
 const { protect, adminOnly, fullAdminOnly } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { getKycRequests, approveKyc, rejectKyc, deleteKyc } = require('../controllers/kycController');
+const { sendAdminNotification } = require('../controllers/notificationController');
 
 // All admin routes require authentication and admin role
 router.use(protect);
@@ -98,6 +99,7 @@ router.post('/game/clear-sequential-crashes', fullAdminOnly, clearSequentialCras
 router.get('/game/crash-queue', getCrashQueue);
 router.get('/wins-bets', getWinningBets);
 router.get('/notifications', getAdminNotifications);
+router.post('/notifications/send', fullAdminOnly, upload.single('image'), sendAdminNotification);
 router.get('/spinner-records', getSpinnerRecords);
 router.get('/settings', fullAdminOnly, getSettings);
 router.put('/settings', fullAdminOnly, updateSettings);
