@@ -16,8 +16,20 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['wallet', 'game', 'system', 'admin', 'ludo', 'kyc'],
+    enum: ['wallet', 'game', 'system', 'admin', 'ludo', 'kyc', 'broadcast'],
     default: 'system'
+  },
+  imageUrl: {
+    type: String,
+    default: null
+  },
+  link: {
+    type: String,
+    default: null
+  },
+  websiteUrl: {
+    type: String,
+    default: null
   },
   read: {
     type: Boolean,

@@ -134,31 +134,24 @@ const removeFcmToken = async (req, res) => {
   }
 };
 
-// @desc    Send push notification to all users (Admin only)
+// @desc    Send web notification to all users (Admin only)
 // @route   POST /api/admin/notifications/send
 const sendAdminNotification = async (req, res) => {
   try {
-    if (!Expo) {
-      return res.status(500).json({ message: 'Push notification service not configured. Please install expo-server-sdk.' });
-    }
-
     const { title, message, link, websiteUrl } = req.body;
     if (!message) {
       return res.status(400).json({ message: 'Notification message is required' });
     }
 
-    // Get all users with FCM tokens
+    // Get all active users
     const users = await User.find({
-      fcmTokens: { $exists: true, $ne: [] },
       status: 'active'
-    }).select('fcmTokens').lean();
+    }).select('_id').lean();
 
     if (users.length === 0) {
-      return res.status(400).json({ message: 'No users with push tokens found' });
+      return res.status(400).json({ message: 'No active users found' });
     }
 
-    const expo = new Expo();
-    const messages = [];
     let imageUrl = null;
 
     // Handle image upload if provided
@@ -173,58 +166,25 @@ const sendAdminNotification = async (req, res) => {
       imageUrl = `${process.env.API_URL || 'http://localhost:5000'}/uploads/${filename}`;
     }
 
-    // Build messages for each token
-    const messageData = {};
-    if (websiteUrl) {
-      messageData.url = websiteUrl;
-      messageData.type = 'external';
-    } else if (link) {
-      messageData.url = link;
-      messageData.type = 'internal';
-    } else {
-      messageData.url = '/';
-      messageData.type = 'internal';
-    }
+    // Create notifications for all users
+    const notificationDocs = users.map(user => ({
+      userId: user._id,
+      title: title || 'RushkroLudo',
+      message,
+      type: 'broadcast',
+      imageUrl,
+      link: link || null,
+      websiteUrl: websiteUrl || null,
+      read: false
+    }));
 
-    users.forEach(user => {
-      user.fcmTokens.forEach(token => {
-        if (Expo.isExpoPushToken(token)) {
-          messages.push({
-            to: token,
-            sound: 'default',
-            title: title || 'RushkroLudo',
-            body: message,
-            data: messageData,
-            ...(imageUrl && { bigPictureUrl: imageUrl })
-          });
-        }
-      });
-    });
-
-    if (messages.length === 0) {
-      return res.status(400).json({ message: 'No valid Expo push tokens found' });
-    }
-
-    // Send notifications in chunks (Expo limits to 100 at a time)
-    const chunks = [];
-    for (let i = 0; i < messages.length; i += 100) {
-      chunks.push(messages.slice(i, i + 100));
-    }
-
-    let totalSent = 0;
-    for (const chunk of chunks) {
-      try {
-        const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-        totalSent += ticketChunk.length;
-      } catch (error) {
-        console.error('Expo error:', error);
-      }
-    }
+    const result = await Notification.insertMany(notificationDocs);
 
     res.json({
-      message: `Notification sent to ${totalSent} users`,
+      message: `Notification sent to ${result.length} users`,
       userCount: users.length,
-      sentCount: totalSent
+      sentCount: result.length,
+      notificationId: result[0]?._id
     });
   } catch (error) {
     console.error('Send notification error:', error);
