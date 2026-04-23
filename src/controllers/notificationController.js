@@ -1,8 +1,14 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User');
-const { Expo } = require('expo-server-sdk');
 const path = require('path');
 const fs = require('fs');
+
+let Expo = null;
+try {
+  Expo = require('expo-server-sdk').Expo;
+} catch (err) {
+  console.warn('expo-server-sdk not installed. Push notifications disabled.');
+}
 
 // @desc    Get user notifications (last 7 days only)
 // @route   GET /api/notifications?page=1&limit=25
@@ -132,6 +138,10 @@ const removeFcmToken = async (req, res) => {
 // @route   POST /api/admin/notifications/send
 const sendAdminNotification = async (req, res) => {
   try {
+    if (!Expo) {
+      return res.status(500).json({ message: 'Push notification service not configured. Please install expo-server-sdk.' });
+    }
+
     const { title, message, link, websiteUrl } = req.body;
     if (!message) {
       return res.status(400).json({ message: 'Notification message is required' });
