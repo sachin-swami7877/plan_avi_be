@@ -54,20 +54,121 @@ function getWeightedOutcome(outcomes) {
 // Round delay (ms) so response doesn't come instantly - spinner can sync with outcome
 const SPIN_ROUND_DELAY_MS = 800;
 
-// @desc    Play spinner (cost 50 or 100)
+// Helper function to play referral spinner logic
+const playReferralSpinnerLogic = async (req, res, user) => {
+  try {
+    const spinCost = 50;
+    const outcomes = OUTCOMES_REFERRAL;
+
+    const userKey = `${user._id}_referral`;
+    let outcome;
+
+    const remaining = forcedThankYou.get(userKey) || 0;
+    if (remaining > 0) {
+      outcome = 'thank_you';
+      forcedThankYou.set(userKey, remaining - 1);
+      if (remaining - 1 <= 0) forcedThankYou.delete(userKey);
+    } else {
+      outcome = getWeightedOutcome(outcomes);
+    }
+
+    await new Promise((r) => setTimeout(r, SPIN_ROUND_DELAY_MS));
+    const winAmount = outcome === 'thank_you' ? 0 : Number(outcome);
+
+    const bigWins = ['100', '120', '170', '200'];
+    if (bigWins.includes(outcome)) {
+      const forceCount = Math.random() < 0.5 ? 1 : 2;
+      forcedThankYou.set(userKey, forceCount);
+    }
+
+    const netChange = winAmount;
+    const balBefore = user.walletBalance;
+
+    const updated = await User.findOneAndUpdate(
+      { _id: user._id, referralSpinsOffered: { $gte: 1 } },
+      {
+        $inc: {
+          walletBalance: netChange,
+          earningsBalance: netChange,
+          referralSpinsOffered: -1,
+          referralSpinsRedeemed: 1,
+        }
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(400).json({ message: 'Failed to redeem referral spin. You may not have any spins left.' });
+    }
+
+    await SpinnerRecord.create({
+      userId: user._id,
+      outcome,
+      winAmount,
+      spinCost,
+      spinType: 'referral',
+      balanceAfter: updated.walletBalance,
+    });
+
+    if (winAmount > 0) {
+      await recordWalletTx(
+        user._id, 'credit', 'referral_spin_win', winAmount,
+        `Referral spinner win — ₹${winAmount} credited`,
+        balBefore, updated.walletBalance
+      );
+    }
+
+    res.json({
+      outcome,
+      winAmount,
+      newBalance: updated.walletBalance,
+      referralSpinsRemaining: updated.referralSpinsOffered,
+      message: outcome === 'thank_you' ? 'Thank you!' : `You won ₹${winAmount}!`,
+    });
+  } catch (error) {
+    console.error('Referral spinner logic error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Play spinner (paid or free)
 // @route   POST /api/spinner/play
 const playSpinner = async (req, res) => {
   try {
-    const spinCost = Number(req.body.spinCost) || 50;
-    if (!VALID_SPIN_COSTS.includes(spinCost)) {
-      return res.status(400).json({ message: 'Invalid spin cost' });
+    const spinType = req.body.type || 'paid'; // 'paid' or 'free'
+
+    // Validate spin type
+    if (!['paid', 'free'].includes(spinType)) {
+      return res.status(400).json({ message: 'Invalid spin type. Must be "paid" or "free"' });
     }
 
     const user = await User.findById(req.user._id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    // Handle FREE spin
+    if (spinType === 'free') {
+      // Validate free spins available
+      if (!user.referralSpinsOffered || user.referralSpinsOffered < 1) {
+        console.warn(`[SECURITY] User ${user._id} attempted free spin with no spins available: ${user.referralSpinsOffered}`);
+        return res.status(400).json({ message: 'You do not have free spins. Earn them by referring friends!' });
+      }
+      return await playReferralSpinnerLogic(req, res, user);
+    }
+
+    // Handle PAID spin
+    const spinCost = Number(req.body.spinCost) || 50;
+
+    // Validate spin cost is integer and in valid range
+    if (!Number.isInteger(spinCost) || !VALID_SPIN_COSTS.includes(spinCost)) {
+      console.warn(`[SECURITY] User ${user._id} attempted invalid spin cost: ${spinCost}`);
+      return res.status(400).json({ message: 'Invalid spin cost. Must be 50 or 100' });
+    }
+
+    // First validation: check balance before processing
     if (user.walletBalance < spinCost) {
+      console.warn(`[SECURITY] User ${user._id} attempted spin with insufficient balance: ${user.walletBalance} < ${spinCost}`);
       return res.status(400).json({ message: `Minimum balance ₹${spinCost} required to spin` });
     }
 
@@ -115,7 +216,10 @@ const playSpinner = async (req, res) => {
       { new: true }
     );
     if (!updated) {
-      return res.status(400).json({ message: 'Insufficient balance' });
+      // This can happen if: 1) Balance was just spent 2) Race condition 3) Fraud attempt
+      const refreshedUser = await User.findById(user._id);
+      console.warn(`[SECURITY] Spin failed for user ${user._id}. Balance check: ${refreshedUser.walletBalance} < ${spinCost}`);
+      return res.status(400).json({ message: 'Insufficient balance. Please refresh and try again.' });
     }
 
     await SpinnerRecord.create({
@@ -154,89 +258,11 @@ const playSpinner = async (req, res) => {
   }
 };
 
-// @desc    Play referral spinner (free spins from referrals)
+// @desc    Play referral spinner (free spins from referrals) — DEPRECATED, use /play with type: "free"
 // @route   POST /api/spinner/play-referral
 const playReferralSpinner = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
-
-    const spinCost = 50;
-    const outcomes = OUTCOMES_REFERRAL;
-
-    if (user.referralSpinsOffered < 1) {
-      return res.status(400).json({ message: 'No referral spins available' });
-    }
-
-    const userKey = `${user._id}_referral`;
-    let outcome;
-
-    const remaining = forcedThankYou.get(userKey) || 0;
-    if (remaining > 0) {
-      outcome = 'thank_you';
-      forcedThankYou.set(userKey, remaining - 1);
-      if (remaining - 1 <= 0) forcedThankYou.delete(userKey);
-    } else {
-      outcome = getWeightedOutcome(outcomes);
-    }
-
-    await new Promise((r) => setTimeout(r, SPIN_ROUND_DELAY_MS));
-    const winAmount = outcome === 'thank_you' ? 0 : Number(outcome);
-
-    const bigWins = ['100', '120', '170', '200'];
-    if (bigWins.includes(outcome)) {
-      const forceCount = Math.random() < 0.5 ? 1 : 2;
-      forcedThankYou.set(userKey, forceCount);
-    }
-
-    const netChange = winAmount;
-    const balBefore = user.walletBalance;
-
-    const updated = await User.findOneAndUpdate(
-      { _id: user._id, referralSpinsOffered: { $gte: 1 } },
-      {
-        $inc: {
-          walletBalance: netChange,
-          earningsBalance: netChange,
-          referralSpinsOffered: -1,
-          referralSpinsRedeemed: 1,
-        }
-      },
-      { new: true }
-    );
-
-    if (!updated) {
-      return res.status(400).json({ message: 'Failed to redeem referral spin' });
-    }
-
-    await SpinnerRecord.create({
-      userId: user._id,
-      outcome,
-      winAmount,
-      spinCost,
-      spinType: 'referral',
-      balanceAfter: updated.walletBalance,
-    });
-
-    if (winAmount > 0) {
-      await recordWalletTx(
-        user._id, 'credit', 'referral_spin_win', winAmount,
-        `Referral spinner win — ₹${winAmount} credited`,
-        balBefore, updated.walletBalance
-      );
-    }
-
-    res.json({
-      outcome,
-      winAmount,
-      newBalance: updated.walletBalance,
-      referralSpinsRemaining: updated.referralSpinsOffered,
-      message: outcome === 'thank_you' ? 'Thank you!' : `You won ₹${winAmount}!`,
-    });
-  } catch (error) {
-    console.error('Referral spinner play error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
+  req.body.type = 'free';
+  return playSpinner(req, res);
 };
 
 // @desc    Get referral spinner status
