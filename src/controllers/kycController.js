@@ -127,9 +127,26 @@ const getKycStatus = async (req, res) => {
 // GET /api/admin/kyc — list KYC requests
 const getKycRequests = async (req, res) => {
   try {
-    const { status, page = 1, limit = 30 } = req.query;
+    const { status, page = 1, limit = 30, search } = req.query;
     const filter = {};
     if (status && status !== 'all') filter.status = status;
+
+    // Search by user name, phone, or aadhaar number
+    if (search && search.trim()) {
+      const term = search.trim();
+      const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      // Find matching users first to filter by name/phone
+      const matchingUsers = await User.find({
+        $or: [{ name: regex }, { phone: regex }],
+      }).select('_id').lean();
+      const matchingUserIds = matchingUsers.map(u => u._id);
+      filter.$or = [
+        { userId: { $in: matchingUserIds } },
+        { aadhaarNumber: regex },
+        { name: regex },
+      ];
+    }
+
     const skip = (Number(page) - 1) * Number(limit);
     const [requests, total] = await Promise.all([
       KycRequest.find(filter).populate('userId', 'name phone').sort({ createdAt: -1 }).skip(skip).limit(Number(limit)).lean(),

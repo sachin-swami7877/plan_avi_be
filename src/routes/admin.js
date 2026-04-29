@@ -13,6 +13,7 @@ const {
   getUserTransactions,
   getWalletRequests,
   processWalletRequest,
+  bulkDeleteWalletRequests,
   getAllBets,
   deleteBets,
   bulkClearBets,
@@ -44,7 +45,7 @@ const {
   exportUsers,
   getAdminCreditLog,
 } = require('../controllers/adminController');
-const { getAdminReferrals, adjustCommission, getAdminAllReferredUsers } = require('../controllers/referralController');
+const { getAdminReferrals, adjustCommission, getAdminAllReferredUsers, getAdminCommissionHistory } = require('../controllers/referralController');
 const {
   getAllLudoMatches,
   getLudoMatchDetail,
@@ -55,10 +56,10 @@ const {
   updateLudoMatchStatus,
   bulkDeleteLudoMatches,
 } = require('../controllers/adminLudoController');
-const { protect, adminOnly, fullAdminOnly } = require('../middleware/auth');
+const { protect, adminOnly, fullAdminOnly, superAdminOnly } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { getKycRequests, approveKyc, rejectKyc, deleteKyc } = require('../controllers/kycController');
-const { sendAdminNotification } = require('../controllers/notificationController');
+const { sendAdminNotification, getNotificationReach } = require('../controllers/notificationController');
 
 // All admin routes require authentication and admin role
 router.use(protect);
@@ -83,6 +84,7 @@ router.put('/users/:id/status', fullAdminOnly, updateUserStatus);
 router.delete('/users/:id', fullAdminOnly, deleteUser);
 router.get('/wallet-requests', getWalletRequests);
 router.put('/wallet-requests/:id', processWalletRequest);
+router.post('/wallet-requests/bulk-delete', fullAdminOnly, bulkDeleteWalletRequests);
 router.get('/bets', getAllBets);
 router.post('/bets/delete', fullAdminOnly, deleteBets);
 router.post('/bets/bulk-clear', fullAdminOnly, bulkClearBets);
@@ -100,10 +102,11 @@ router.get('/game/crash-queue', getCrashQueue);
 router.get('/wins-bets', getWinningBets);
 router.get('/notifications', getAdminNotifications);
 router.post('/notifications/send', fullAdminOnly, upload.single('image'), sendAdminNotification);
+router.get('/notifications/reach', fullAdminOnly, getNotificationReach);
 router.get('/spinner-records', getSpinnerRecords);
 router.get('/settings', fullAdminOnly, getSettings);
 router.put('/settings', fullAdminOnly, updateSettings);
-router.post('/settings/qr', fullAdminOnly, upload.single('qrCode'), uploadQrCode);
+router.post('/settings/qr', superAdminOnly, upload.single('qrCode'), uploadQrCode);
 router.post('/settings/logo', fullAdminOnly, upload.single('logo'), uploadLogo);
 router.get('/bonus-records', getBonusRecords);
 
@@ -115,6 +118,7 @@ router.get('/credit-log', fullAdminOnly, getAdminCreditLog);
 
 // Referrals
 router.get('/referrals/all-referred', fullAdminOnly, getAdminAllReferredUsers);
+router.get('/referrals/history', fullAdminOnly, getAdminCommissionHistory);
 router.get('/referrals', fullAdminOnly, getAdminReferrals);
 router.put('/referrals/:id/adjust', fullAdminOnly, adjustCommission);
 

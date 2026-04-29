@@ -373,4 +373,43 @@ const getAdminAllReferredUsers = async (req, res) => {
   }
 };
 
-module.exports = { getMyReferral, redeemCommission, getAdminReferrals, adjustCommission, getAdminAllReferredUsers };
+// ── ADMIN: Detailed commission history for a referrer-referred pair ──────────
+// @route GET /api/admin/referrals/history?referrerId=X&referredUserId=Y
+const getAdminCommissionHistory = async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const { referrerId, referredUserId } = req.query;
+    if (!referrerId) return res.status(400).json({ message: 'referrerId is required' });
+    if (!mongoose.isValidObjectId(referrerId)) {
+      return res.status(400).json({ message: 'Invalid referrerId' });
+    }
+    if (referredUserId && !mongoose.isValidObjectId(referredUserId)) {
+      return res.status(400).json({ message: 'Invalid referredUserId' });
+    }
+
+    const filter = { referrerId };
+    if (referredUserId) filter.referredUserId = referredUserId;
+
+    const records = await ReferralCommission.find(filter)
+      .populate('referrerId', 'name phone referralCode')
+      .populate('referredUserId', 'name phone')
+      .populate('matchId', 'roomCode entryAmount winnerId status')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const round = (n) => Math.round(n * 100) / 100;
+    const summary = {
+      totalRecords: records.length,
+      totalEarned: round(records.reduce((s, c) => s + c.commissionAmount, 0)),
+      pending: round(records.filter(c => !c.status || c.status === 'pending').reduce((s, c) => s + c.commissionAmount, 0)),
+      redeemed: round(records.filter(c => c.status === 'redeemed').reduce((s, c) => s + c.commissionAmount, 0)),
+    };
+
+    res.json({ records, summary });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+module.exports = { getMyReferral, redeemCommission, getAdminReferrals, adjustCommission, getAdminAllReferredUsers, getAdminCommissionHistory };

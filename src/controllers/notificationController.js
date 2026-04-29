@@ -94,6 +94,9 @@ const getUnreadCount = async (req, res) => {
   }
 };
 
+// Max FCM tokens to keep per user (oldest get trimmed beyond this)
+const MAX_TOKENS_PER_USER = 5;
+
 // @desc    Save FCM push token for current user
 // @route   POST /api/notifications/fcm-token
 const saveFcmToken = async (req, res) => {
@@ -101,12 +104,50 @@ const saveFcmToken = async (req, res) => {
     const { token } = req.body;
     if (!token) return res.status(400).json({ message: 'Token is required' });
 
+    // Step 1: ensure token is in the array (no duplicate). Mongo's $addToSet handles dedup.
+    // Step 2: cap the array size — keep most recent MAX_TOKENS_PER_USER (drop oldest from the front).
+    // Note: $addToSet appends to the END, so we $slice from the END to keep newest.
     await User.findByIdAndUpdate(req.user._id, {
-      $addToSet: { fcmTokens: token },
+      $push: {
+        fcmTokens: {
+          $each: [token],
+          $slice: -MAX_TOKENS_PER_USER, // keep last N entries
+        },
+      },
     });
+
+    // Defensively dedup: $push doesn't dedup. If token already exists, we'd have a duplicate.
+    // Pull all instances first via $pull-then-$push pattern is racy; instead, use a clean two-step.
+    // Simpler: re-set the array to unique values truncated to MAX.
+    const userDoc = await User.findById(req.user._id).select('fcmTokens').lean();
+    if (userDoc?.fcmTokens?.length) {
+      // Preserve order: latest occurrence of each token wins
+      const seen = new Set();
+      const deduped = [];
+      // Iterate from end so we keep the most recent occurrence
+      for (let i = userDoc.fcmTokens.length - 1; i >= 0; i--) {
+        const t = userDoc.fcmTokens[i];
+        if (!seen.has(t)) {
+          seen.add(t);
+          deduped.unshift(t); // prepend to maintain rough chronological order
+        }
+      }
+      const finalTokens = deduped.slice(-MAX_TOKENS_PER_USER);
+      if (finalTokens.length !== userDoc.fcmTokens.length) {
+        await User.updateOne({ _id: req.user._id }, { $set: { fcmTokens: finalTokens } });
+      }
+    }
+
+    // Also: this token might already be registered to ANOTHER user (e.g., shared device,
+    // or user logged out + new user logged in on the same browser). Remove it from others.
+    await User.updateMany(
+      { _id: { $ne: req.user._id }, fcmTokens: token },
+      { $pull: { fcmTokens: token } }
+    );
+
     res.json({ message: 'Token saved' });
   } catch (error) {
-    console.error(error);
+    console.error('saveFcmToken error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -151,14 +192,18 @@ const sendAdminNotification = async (req, res) => {
 
     // Handle image upload if provided
     if (req.file) {
-      const uploadDir = path.join(__dirname, '../../public/uploads');
+      // Save to the same dir that index.js serves at /uploads
+      const uploadDir = path.join(__dirname, '../../uploads');
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
-      const filename = `notification-${Date.now()}-${req.file.originalname}`;
+      // Sanitize filename — keep only alphanumeric, dot, dash, underscore
+      const safeName = String(req.file.originalname || 'image').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filename = `notification-${Date.now()}-${safeName}`;
       const filepath = path.join(uploadDir, filename);
       fs.writeFileSync(filepath, req.file.buffer);
-      imageUrl = `${process.env.API_URL || 'http://localhost:5000'}/uploads/${filename}`;
+      const baseUrl = process.env.API_URL || `${req.protocol}://${req.get('host')}`;
+      imageUrl = `${baseUrl}/uploads/${filename}`;
     }
 
     // Create notifications for all users (for database/history)
@@ -179,8 +224,9 @@ const sendAdminNotification = async (req, res) => {
     const allTokens = users.flatMap(user => user.fcmTokens).filter(Boolean);
     const notifTitle = title || 'RushkroLudo';
 
+    let pushResult = { successCount: 0, failureCount: 0 };
     if (allTokens.length > 0) {
-      await sendPushNotification(null, allTokens, notifTitle, message, {
+      pushResult = await sendPushNotification(null, allTokens, notifTitle, message, {
         type: 'broadcast',
         imageUrl: imageUrl || '',
         websiteUrl: websiteUrl || '',
@@ -204,14 +250,46 @@ const sendAdminNotification = async (req, res) => {
     }
 
     res.json({
-      message: `Notification sent to ${allTokens.length} devices`,
+      message: `Push: ${pushResult.successCount} delivered, ${pushResult.failureCount} failed (${users.length} users, ${allTokens.length} devices)`,
       userCount: users.length,
-      sentCount: allTokens.length,
+      tokenCount: allTokens.length,
+      successCount: pushResult.successCount,
+      failureCount: pushResult.failureCount,
       notificationId: result[0]?._id
     });
   } catch (error) {
     console.error('Send notification error:', error);
     res.status(500).json({ message: 'Failed to send notification' });
+  }
+};
+
+// @desc    Push notification reach stats — how many users can receive pushes
+// @route   GET /api/admin/notifications/reach
+const getNotificationReach = async (req, res) => {
+  try {
+    const [totalActive, withTokens, totalTokens] = await Promise.all([
+      User.countDocuments({ status: 'active' }),
+      User.countDocuments({
+        status: 'active',
+        fcmTokens: { $exists: true, $ne: [] },
+      }),
+      User.aggregate([
+        { $match: { status: 'active', fcmTokens: { $exists: true, $ne: [] } } },
+        { $project: { tokenCount: { $size: '$fcmTokens' } } },
+        { $group: { _id: null, total: { $sum: '$tokenCount' } } },
+      ]),
+    ]);
+
+    res.json({
+      totalActiveUsers: totalActive,
+      usersWithPushEnabled: withTokens,
+      usersWithoutPushEnabled: totalActive - withTokens,
+      totalDevicesReachable: totalTokens[0]?.total || 0,
+      reachPercent: totalActive > 0 ? Math.round((withTokens / totalActive) * 100) : 0,
+    });
+  } catch (error) {
+    console.error('getNotificationReach error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
@@ -223,4 +301,5 @@ module.exports = {
   saveFcmToken,
   removeFcmToken,
   sendAdminNotification,
+  getNotificationReach,
 };

@@ -166,7 +166,7 @@ const getDashboardStats = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { period, search, from: fromStr, to: toStr, status, page = 1, limit = 50, sortBy, balanceMin, balanceMax, userIds } = req.query;
+    const { period, search, from: fromStr, to: toStr, status, page = 1, limit = 50, sortBy, balanceMin, balanceMax, userIds, hasFcmToken } = req.query;
     let filter = {};
     // Filter by specific user IDs (for online users tab)
     if (userIds) {
@@ -205,6 +205,20 @@ const getUsers = async (req, res) => {
       filter.walletBalance = {};
       if (balanceMin !== undefined) filter.walletBalance.$gte = Number(balanceMin);
       if (balanceMax !== undefined) filter.walletBalance.$lte = Number(balanceMax);
+    }
+
+    // Push notification eligibility filter (has FCM token / no token)
+    if (hasFcmToken === 'true' || hasFcmToken === true) {
+      filter.fcmTokens = { $exists: true, $ne: [] };
+    } else if (hasFcmToken === 'false' || hasFcmToken === false) {
+      // "No token" — must combine with existing $or via $and to avoid clobbering search
+      const noTokenCond = { $or: [{ fcmTokens: { $exists: false } }, { fcmTokens: { $size: 0 } }] };
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, noTokenCond];
+        delete filter.$or;
+      } else {
+        Object.assign(filter, noTokenCond);
+      }
     }
 
     // Hide protected super admin accounts from all user listings
@@ -538,6 +552,27 @@ const getWalletRequests = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Bulk delete rejected wallet requests
+// @route   POST /api/admin/wallet-requests/bulk-delete
+// @body    { ids: [String] }
+const bulkDeleteWalletRequests = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'ids array is required' });
+    }
+    // Only allow deletion of rejected requests for safety
+    const result = await WalletRequest.deleteMany({
+      _id: { $in: ids },
+      status: 'rejected',
+    });
+    res.json({ message: `${result.deletedCount} rejected request(s) deleted`, deletedCount: result.deletedCount });
+  } catch (error) {
+    console.error('bulkDeleteWalletRequests error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -1539,18 +1574,30 @@ const getLudoProfit = async (req, res) => {
       if (!Object.keys(filter.createdAt).length) delete filter.createdAt;
     }
 
-    const [matches, total] = await Promise.all([
+    const { calcLudoCommission, getCommissionTiers } = require('../utils/ludoCommission');
+
+    // Fetch tiers ONCE (instead of once per match — major performance fix)
+    const tiers = await getCommissionTiers();
+
+    const [matches, total, allMatches] = await Promise.all([
       LudoMatch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       LudoMatch.countDocuments(filter),
+      // Fetch ALL matches in filter (only fields needed for commission calc) to compute correct total profit across pages
+      LudoMatch.find(filter).select('entryAmount players').lean(),
     ]);
 
-    // Calculate commission for each match
-    const { calcLudoCommission } = require('../utils/ludoCommission');
+    // Total profit across the ENTIRE filtered range (not just current page)
     let totalProfit = 0;
+    for (const m of allMatches) {
+      const pool = m.players.reduce((s, p) => s + (p.amountPaid || 0), 0);
+      const { commission } = await calcLudoCommission(pool, m.entryAmount, tiers);
+      totalProfit += commission;
+    }
+
+    // Build rows for current page only
     const rows = await Promise.all(matches.map(async (m) => {
       const pool = m.players.reduce((s, p) => s + (p.amountPaid || 0), 0);
-      const { commission, winnerAmount } = await calcLudoCommission(pool, m.entryAmount);
-      totalProfit += commission;
+      const { commission, winnerAmount } = await calcLudoCommission(pool, m.entryAmount, tiers);
       const winner = m.players.find(p => p.userId?.toString() === m.winnerId?.toString());
       const loser = m.players.find(p => p.userId?.toString() !== m.winnerId?.toString());
       return {
@@ -1565,7 +1612,7 @@ const getLudoProfit = async (req, res) => {
       };
     }));
 
-    res.json({ rows, total, totalPages: Math.ceil(total / limitNum), page: pageNum, totalProfit });
+    res.json({ rows, total, totalPages: Math.ceil(total / limitNum), page: pageNum, totalProfit: Math.round(totalProfit * 100) / 100 });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -1588,15 +1635,26 @@ const getAviatorProfit = async (req, res) => {
     }
 
     const GameRound = require('../models/GameRound');
-    const [rounds, total] = await Promise.all([
+    const [rounds, total, totalsAgg] = await Promise.all([
       GameRound.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       GameRound.countDocuments(filter),
+      // Compute totalProfit across the ENTIRE filtered range, not just current page
+      GameRound.aggregate([
+        { $match: filter },
+        { $group: {
+          _id: null,
+          totalBet: { $sum: '$totalBetAmount' },
+          totalWin: { $sum: '$totalWinAmount' },
+        } },
+      ]),
     ]);
 
-    let totalProfit = 0;
+    const totalProfit = totalsAgg.length
+      ? Math.round(((totalsAgg[0].totalBet || 0) - (totalsAgg[0].totalWin || 0)) * 100) / 100
+      : 0;
+
     const rows = rounds.map((r) => {
       const profit = (r.totalBetAmount || 0) - (r.totalWinAmount || 0);
-      totalProfit += profit;
       return {
         _id: r._id,
         roundId: r.roundId,
@@ -1931,6 +1989,7 @@ module.exports = {
   deleteUser,
   getWalletRequests,
   processWalletRequest,
+  bulkDeleteWalletRequests,
   getAllBets,
   deleteBets,
   bulkClearBets,

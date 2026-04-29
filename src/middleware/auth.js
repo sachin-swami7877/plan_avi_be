@@ -55,4 +55,12 @@ const fullAdminOnly = async (req, res, next) => {
   }
 };
 
-module.exports = { protect, adminOnly, fullAdminOnly };
+const superAdminOnly = async (req, res, next) => {
+  if (req.user && (req.user.role === 'superadmin' || req.user.isSuperAdmin)) {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Not authorized as super admin' });
+  }
+};
+
+module.exports = { protect, adminOnly, fullAdminOnly, superAdminOnly };
