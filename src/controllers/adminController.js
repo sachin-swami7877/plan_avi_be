@@ -72,10 +72,17 @@ const getDashboardStats = async (req, res) => {
       ]),
     ]);
 
-    // Spinner: spinCost = bet, winAmount = win
+    // Spinner profit:
+    // - Paid spins: spinCost is real revenue, winAmount is payout
+    // - Free/referral spins: user paid nothing (spinCost is just a table-selector stored as 50),
+    //   so count spinCost=0 for referral. Only deduct actual winAmount if user won something.
     const spinnerAgg = await SpinnerRecord.aggregate([
       { $match: betFilter },
-      { $group: { _id: null, totalSpinCost: { $sum: '$spinCost' }, totalSpinWin: { $sum: '$winAmount' } } },
+      { $group: {
+        _id: null,
+        totalSpinCost: { $sum: { $cond: [{ $eq: ['$spinType', 'referral'] }, 0, '$spinCost'] } },
+        totalSpinWin:  { $sum: '$winAmount' },
+      }},
     ]);
 
     // Ludo: completed matches — pool = sum of players' amountPaid (bet)
@@ -1505,17 +1512,62 @@ const getUserTransactions = async (req, res) => {
 };
 
 // Lightweight pending counts for admin badge indicators
+// Accepts optional query params: sinceMoney, sinceAlerts, sinceLudo, sinceKyc (ISO timestamps)
+// Returns total pending counts + unread counts per badge
 const getPendingCounts = async (req, res) => {
   try {
     const LudoResultRequest = require('../models/LudoResultRequest');
     const KycRequest = require('../models/KycRequest');
-    const [pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc] = await Promise.all([
+
+    const parseTs = (ts) => {
+      if (!ts) return null;
+      const d = new Date(ts);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    const moneyDate  = parseTs(req.query.sinceMoney);
+    const alertsDate = parseTs(req.query.sinceAlerts);
+    const ludoDate   = parseTs(req.query.sinceLudo);
+    const kycDate    = parseTs(req.query.sinceKyc);
+
+    const mF = (d) => d ? { createdAt: { $gt: d } } : null;
+
+    const [
+      pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc,
+      unreadDeposits, unreadWithdrawals,
+      unreadLudo, unreadKyc,
+      unreadAlertsDeposits, unreadAlertsWithdrawals, unreadAlertsLudo, unreadAlertsKyc,
+    ] = await Promise.all([
       WalletRequest.countDocuments({ type: 'deposit', status: 'pending' }),
       WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending' }),
       LudoResultRequest.countDocuments({ status: 'pending' }),
       KycRequest.countDocuments({ status: 'pending' }),
+      // Money badge unread
+      mF(moneyDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...mF(moneyDate) }) : Promise.resolve(null),
+      mF(moneyDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...mF(moneyDate) }) : Promise.resolve(null),
+      // Ludo badge unread
+      mF(ludoDate)  ? LudoResultRequest.countDocuments({ status: 'pending', ...mF(ludoDate) })  : Promise.resolve(null),
+      // KYC badge unread
+      mF(kycDate)   ? KycRequest.countDocuments({ status: 'pending', ...mF(kycDate) })           : Promise.resolve(null),
+      // Alerts badge unread (all 4 categories since sinceAlerts)
+      mF(alertsDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...mF(alertsDate) }) : Promise.resolve(null),
+      mF(alertsDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...mF(alertsDate) }) : Promise.resolve(null),
+      mF(alertsDate) ? LudoResultRequest.countDocuments({ status: 'pending', ...mF(alertsDate) })                 : Promise.resolve(null),
+      mF(alertsDate) ? KycRequest.countDocuments({ status: 'pending', ...mF(alertsDate) })                        : Promise.resolve(null),
     ]);
-    res.json({ pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc });
+
+    const unreadAlerts = alertsDate
+      ? (unreadAlertsDeposits || 0) + (unreadAlertsWithdrawals || 0) + (unreadAlertsLudo || 0) + (unreadAlertsKyc || 0)
+      : pendingDeposits + pendingWithdrawals + pendingLudo + pendingKyc;
+
+    res.json({
+      pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc,
+      unreadDeposits:   unreadDeposits   ?? pendingDeposits,
+      unreadWithdrawals: unreadWithdrawals ?? pendingWithdrawals,
+      unreadLudo:       unreadLudo       ?? pendingLudo,
+      unreadKyc:        unreadKyc        ?? pendingKyc,
+      unreadAlerts,
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }

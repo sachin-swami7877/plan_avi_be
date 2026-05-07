@@ -24,13 +24,10 @@ const OUTCOMES_100 = [
   { value: '200', weight: 1 },
 ];
 
-// FREE referral spinner outcomes: 60% empty, 22% ₹20, 5% ₹50, 2% ₹100, 1% ₹120
+// FREE referral spinner outcomes: 65% empty, 35% ₹20 — no big prizes on free spins
 const OUTCOMES_REFERRAL = [
-  { value: 'thank_you', weight: 60 },
-  { value: '20', weight: 22 },
-  { value: '50', weight: 5 },
-  { value: '100', weight: 2 },
-  { value: '120', weight: 1 },
+  { value: 'thank_you', weight: 65 },
+  { value: '20', weight: 35 },
 ];
 
 // Big win thresholds — if user wins these, force next 1-2 spins to thank_you
@@ -75,11 +72,7 @@ const playReferralSpinnerLogic = async (req, res, user) => {
     await new Promise((r) => setTimeout(r, SPIN_ROUND_DELAY_MS));
     const winAmount = outcome === 'thank_you' ? 0 : Number(outcome);
 
-    const bigWins = ['100', '120', '170', '200'];
-    if (bigWins.includes(outcome)) {
-      const forceCount = Math.random() < 0.5 ? 1 : 2;
-      forcedThankYou.set(userKey, forceCount);
-    }
+    // No big wins possible in free referral spins, so no forced thank_you needed
 
     const netChange = winAmount;
     const balBefore = user.walletBalance;
