@@ -236,6 +236,18 @@ const joinMatch = async (req, res) => {
       return res.status(400).json({ message: 'This match has expired' });
     }
 
+    // Block if joiner already has a running bet (live/cancel_requested) with no result request yet.
+    // Once a result request exists for that match, it's effectively over so this user can accept new bets.
+    const matchIdsWithResult = await LudoResultRequest.find({}).distinct('matchId');
+    const runningBet = await LudoMatch.findOne({
+      $or: [{ creatorId: req.user._id }, { 'players.userId': req.user._id }],
+      status: { $in: ['live', 'cancel_requested'] },
+      _id: { $nin: matchIdsWithResult },
+    }).select('_id').lean();
+    if (runningBet) {
+      return res.status(400).json({ message: 'You already have a running bet. Finish it (or submit the result) before joining another.' });
+    }
+
     // ── STEP 1: Atomically claim the match ──
     // Only ONE joiner can win this — prevents double-join race condition entirely.
     const match = await LudoMatch.findOneAndUpdate(
@@ -320,9 +332,9 @@ const joinMatch = async (req, res) => {
     io.to(`user_${joiner._id}`).emit('wallet:balance-updated', { walletBalance: joinerUpdated.walletBalance, depositBalance: joinerUpdated.depositBalance, earningsBalance: joinerUpdated.earningsBalance });
     io.to(`user_${creator._id}`).emit('wallet:balance-updated', { walletBalance: creatorUpdated.walletBalance, depositBalance: creatorUpdated.depositBalance, earningsBalance: creatorUpdated.earningsBalance });
 
-    // Auto-cancel other waiting matches created by the same creator — no refund needed (nothing was deducted)
+    // Auto-cancel other waiting matches created by EITHER player — no refund needed (nothing was deducted at create)
     await LudoMatch.updateMany(
-      { creatorId: match.creatorId, status: 'waiting', _id: { $ne: match._id } },
+      { creatorId: { $in: [match.creatorId, req.user._id] }, status: 'waiting', _id: { $ne: match._id } },
       { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Auto-cancelled — another match went live' } }
     );
 
@@ -407,12 +419,27 @@ const requestCancel = async (req, res) => {
     const reasonLabel = CANCEL_REASON_LABELS[reasonCode] || reasonCode;
     const displayReason = reasonCode === 'other' ? (customReason || 'अन्य कारण') : reasonLabel;
 
-    match.status = 'cancel_requested';
-    match.cancelRequestedBy = req.user._id;
-    match.cancelRequestedAt = new Date();
-    match.cancelReasonCode = reasonCode;
-    match.cancelReasonCustom = reasonCode === 'other' ? customReason : null;
-    await match.save();
+    // Atomic transition live → cancel_requested. If both players hit "Cancel" at the same time,
+    // only one wins and becomes the canceller; the other gets a clear "already requested" error
+    // and their UI will refresh to the Accept/Dispute dialog.
+    const claimed = await LudoMatch.findOneAndUpdate(
+      { _id: match._id, status: 'live' },
+      {
+        $set: {
+          status: 'cancel_requested',
+          cancelRequestedBy: req.user._id,
+          cancelRequestedAt: new Date(),
+          cancelReasonCode: reasonCode,
+          cancelReasonCustom: reasonCode === 'other' ? customReason : null,
+        },
+      },
+      { new: true }
+    );
+    if (!claimed) {
+      return res.status(400).json({ message: 'Match state changed — opponent may have already requested cancel. Please refresh.' });
+    }
+    match.status = claimed.status;
+    match.cancelRequestedBy = claimed.cancelRequestedBy;
 
     const io = req.app.get('io');
     const otherPlayer = match.players.find((p) => p.userId.toString() !== userId);
@@ -447,71 +474,132 @@ const requestCancel = async (req, res) => {
   }
 };
 
-// @desc    Accept opponent's cancel request — sends to admin for refund review
+// @desc    Accept opponent's cancel request — auto-resolve with full refund, no admin review
 // @route   POST /api/ludo/accept-cancel
 const acceptCancel = async (req, res) => {
   try {
     const { matchId } = req.body;
     if (!matchId) return res.status(400).json({ message: 'Match ID is required' });
 
-    const match = await LudoMatch.findById(matchId);
-    if (!match) return res.status(404).json({ message: 'Match not found' });
+    // ── Pre-checks (friendly errors) ──
+    const pre = await LudoMatch.findById(matchId).lean();
+    if (!pre) return res.status(404).json({ message: 'Match not found' });
 
     const userId = req.user._id.toString();
-    const isPlayer = match.players.some((p) => p.userId.toString() === userId);
+    const isPlayer = pre.players.some((p) => p.userId.toString() === userId);
     if (!isPlayer) return res.status(403).json({ message: 'You are not in this match' });
-
-    if (match.status !== 'cancel_requested') {
+    if (pre.status !== 'cancel_requested') {
       return res.status(400).json({ message: 'No pending cancel request for this match' });
     }
-    // Only the OTHER player (not the one who requested) can accept
-    if (match.cancelRequestedBy.toString() === userId) {
+    if (!pre.cancelRequestedBy || pre.cancelRequestedBy.toString() === userId) {
       return res.status(400).json({ message: 'You cannot accept your own cancel request' });
     }
 
-    // Check no result request already exists
-    const hasRequest = await LudoResultRequest.findOne({ matchId: match._id });
-    if (hasRequest) {
-      return res.status(400).json({ message: 'A result request already exists for this match.' });
+    // ── ATOMIC LOCK ──
+    // LudoResultRequest.matchId has a unique index. Creating one here is our single-winner gate:
+    // if any other path (submitWinDispute, submitResult, submitLoss) is racing to make one, exactly
+    // one of us wins. We create it already resolved so the admin never sees it as pending.
+    let lockReq;
+    try {
+      lockReq = await LudoResultRequest.create({
+        matchId: pre._id,
+        disputeType: 'cancel_accepted',
+        claims: [],
+        status: 'resolved',
+        reviewedAt: new Date(),
+        adminNote: 'Auto-resolved — both players agreed to cancel, full refund issued',
+      });
+    } catch (err) {
+      if (err && err.code === 11000) {
+        return res.status(400).json({ message: 'A result request already exists for this match.' });
+      }
+      throw err;
     }
 
-    // Create cancel_accepted result request — admin will decide refunds
-    const request = await LudoResultRequest.create({
-      matchId: match._id,
-      disputeType: 'cancel_accepted',
-      claims: [],
-      status: 'pending',
-    });
+    // ── ATOMIC MATCH TRANSITION ──
+    // Flip status cancel_requested → cancelled. Must happen AFTER the lock so refunds can't double up.
+    const claimed = await LudoMatch.findOneAndUpdate(
+      { _id: pre._id, status: 'cancel_requested' },
+      { $set: { status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Both players agreed to cancel — full refund' } },
+      { new: true }
+    );
+    if (!claimed) {
+      // Status was changed by someone else between our pre-check and the lock — clean up the lock so the system recovers.
+      await LudoResultRequest.deleteOne({ _id: lockReq._id });
+      return res.status(400).json({ message: 'Match state changed. Please refresh.' });
+    }
 
     const io = req.app.get('io');
+    const refundDecisions = [];
 
-    // Notify admin
-    if (io) {
-      io.to('admins').emit('admin:ludo-result-request', {
-        requestId: request._id,
-        matchId: match._id,
-        userName: req.user.name,
-        disputeType: 'cancel_accepted',
+    // ── REFUND BOTH PLAYERS (atomic $inc — race-safe vs concurrent wallet ops) ──
+    for (const player of claimed.players) {
+      const refundAmt = player.amountPaid || 0;
+      if (refundAmt <= 0) {
+        // No money was actually deducted for this player — nothing to refund.
+        refundDecisions.push({ userId: player.userId, userName: player.userName, refundType: 'full', amount: 0 });
+        continue;
+      }
+
+      // Split refund the same way the entry fee was deducted (deposit vs earnings).
+      const paidDep = player.paidFromDeposit || 0;
+      const paidEarn = player.paidFromEarnings || 0;
+      const total = paidDep + paidEarn;
+      const refundToDeposit = total > 0
+        ? Math.round((paidDep / total) * refundAmt * 100) / 100
+        : refundAmt;
+      const refundToEarnings = Math.round((refundAmt - refundToDeposit) * 100) / 100;
+
+      const updated = await User.findOneAndUpdate(
+        { _id: player.userId },
+        { $inc: { walletBalance: refundAmt, depositBalance: refundToDeposit, earningsBalance: refundToEarnings } },
+        { new: true }
+      );
+      if (!updated) continue;
+
+      const balBefore = updated.walletBalance - refundAmt;
+      await recordWalletTx(
+        player.userId, 'credit', 'ludo_refund', refundAmt,
+        `Ludo match cancelled — both players agreed, ₹${refundAmt} refunded`,
+        balBefore, updated.walletBalance, claimed._id
+      );
+
+      refundDecisions.push({
+        userId: player.userId,
+        userName: player.userName,
+        refundType: 'full',
+        amount: refundAmt,
       });
-    }
 
-    // Notify both players that admin will now decide
-    for (const player of match.players) {
       const notif = await Notification.create({
         userId: player.userId,
-        title: 'Cancel Accept — Admin Review',
-        message: `Cancel accept हो गया। Admin refund तय करेगा और जल्द ही पैसा वापस होगा।`,
+        title: 'Match Cancelled — Full Refund',
+        message: `दोनों players ने cancel पर agree किया। ₹${refundAmt} आपके wallet में वापस कर दिया गया।`,
         type: 'game',
       });
       if (io) {
         io.to(`user_${player.userId}`).emit('notification:new', notif);
-        io.to(`user_${player.userId}`).emit('ludo:cancel-accepted', { matchId: match._id.toString() });
+        io.to(`user_${player.userId}`).emit('ludo:match-cancelled', { matchId: claimed._id.toString() });
+        io.to(`user_${player.userId}`).emit('wallet:balance-updated', {
+          walletBalance: updated.walletBalance,
+          depositBalance: updated.depositBalance,
+          earningsBalance: updated.earningsBalance,
+        });
       }
     }
 
-    res.json({ message: 'Cancel accepted. Admin will decide the refund amounts.', requestId: request._id });
+    // Audit trail on the result request so admin can see why/how it was auto-resolved.
+    lockReq.refundDecisions = refundDecisions;
+    await lockReq.save();
+
+    if (io) {
+      io.emit('ludo:match-live');
+      io.emit('ludo:waiting-updated');
+    }
+
+    res.json({ message: 'Cancel accepted. Full refund credited to both players.' });
   } catch (error) {
-    console.error(error);
+    console.error('[acceptCancel] ERROR:', error.message, error.stack);
     res.status(500).json({ message: 'Server error' });
   }
 };
