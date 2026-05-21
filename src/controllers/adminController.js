@@ -304,8 +304,13 @@ const updateUser = async (req, res) => {
 
     if (name !== undefined) user.name = String(name).trim() || user.name;
     if (role !== undefined) {
-      // Superadmin can assign any role; admin can assign up to 'admin' only
       const callerRole = req.user.role;
+      const callerIsFullAdmin = callerRole === 'superadmin' || callerRole === 'admin' || req.user.isAdmin;
+      // Only full admins (admin/superadmin) can change roles. Managers cannot promote or demote anyone.
+      if (!callerIsFullAdmin) {
+        return res.status(403).json({ message: 'You are not authorized to change user roles' });
+      }
+      // Superadmin can assign any role; admin can assign up to 'admin' only
       const allowedRoles = callerRole === 'superadmin'
         ? ['user', 'manager', 'admin', 'superadmin']
         : ['user', 'manager', 'admin'];
