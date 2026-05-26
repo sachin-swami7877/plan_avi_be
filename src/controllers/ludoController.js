@@ -165,21 +165,67 @@ const submitRoomCode = async (req, res) => {
     const code = String(roomCode).trim().toUpperCase().slice(0, 10);
     if (!code) return res.status(400).json({ message: 'Invalid room code' });
 
-    const match = await LudoMatch.findById(matchId);
-    if (!match) return res.status(404).json({ message: 'Match not found' });
-    if (match.creatorId.toString() !== req.user._id.toString()) {
+    const pre = await LudoMatch.findById(matchId).lean();
+    if (!pre) return res.status(404).json({ message: 'Match not found' });
+    if (pre.creatorId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only the creator can submit the room code' });
     }
-    if (match.status !== 'waiting' && match.status !== 'live') {
+    if (pre.status !== 'waiting' && pre.status !== 'live') {
       return res.status(400).json({ message: 'Cannot set room code for this match' });
+    }
+    // Once a room code is set it is FROZEN — cannot be changed by anyone, ever.
+    // Return the existing code so the client UI re-syncs to the original value.
+    if (pre.roomCode && pre.roomCode.trim() !== '') {
+      return res.status(400).json({
+        message: 'Room code is already set and cannot be changed.',
+        match: {
+          _id: pre._id,
+          roomCode: pre.roomCode,
+          entryAmount: pre.entryAmount,
+          status: pre.status,
+          gameActualStartAt: pre.gameActualStartAt,
+          gameStartedAt: pre.gameStartedAt,
+        },
+      });
     }
 
     const now = new Date();
-    match.roomCode = code;
-    // Game starts immediately — no confirm step, no countdown
-    match.gameActualStartAt = now;
-    match.gameStartedAt = now;
-    await match.save();
+
+    // ── ATOMIC SET-ONCE ──
+    // Filter requires roomCode is missing/empty AND match is the creator's AND status is waiting/live.
+    // If two requests race (e.g., double-tap on the Submit button) only the first wins; the second
+    // gets a null back and we return the existing (now frozen) code.
+    const match = await LudoMatch.findOneAndUpdate(
+      {
+        _id: matchId,
+        creatorId: req.user._id,
+        status: { $in: ['waiting', 'live'] },
+        $or: [{ roomCode: { $exists: false } }, { roomCode: '' }, { roomCode: null }],
+      },
+      {
+        $set: {
+          roomCode: code,
+          gameActualStartAt: now,
+          gameStartedAt: now,
+        },
+      },
+      { new: true }
+    );
+    if (!match) {
+      // Lost the race — fetch current state and return the frozen code.
+      const current = await LudoMatch.findById(matchId).lean();
+      return res.status(400).json({
+        message: 'Room code is already set and cannot be changed.',
+        match: current && current.roomCode ? {
+          _id: current._id,
+          roomCode: current.roomCode,
+          entryAmount: current.entryAmount,
+          status: current.status,
+          gameActualStartAt: current.gameActualStartAt,
+          gameStartedAt: current.gameStartedAt,
+        } : null,
+      });
+    }
 
     // Notify both players via socket that game has started
     const io = req.app.get('io');
