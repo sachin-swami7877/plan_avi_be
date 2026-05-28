@@ -162,10 +162,13 @@ const createWithdrawalRequest = async (req, res) => {
       return res.status(403).json({ message: 'KYC verification required before withdrawal. Please complete KYC on your Profile page.', kycRequired: true });
     }
 
-    const { amount } = req.body;
+    const amount = Number(req.body?.amount);
 
     if (!amount || amount < 100) {
       return res.status(400).json({ message: 'Minimum withdrawal amount is Rs. 100' });
+    }
+    if (!Number.isInteger(amount) || amount % 50 !== 0) {
+      return res.status(400).json({ message: 'Amount must be in multiples of 50 (e.g. 100, 150, 200, 250, 500)' });
     }
 
     // Quick pre-check (non-atomic) for readable error messages

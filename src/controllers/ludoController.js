@@ -111,6 +111,9 @@ const createMatch = async (req, res) => {
     if (!amount || amount < ENTRY_MIN) {
       return res.status(400).json({ message: `Minimum entry is Rs. ${ENTRY_MIN}` });
     }
+    if (!Number.isInteger(amount) || amount % 50 !== 0) {
+      return res.status(400).json({ message: 'Amount must be in multiples of 50 (e.g. 50, 100, 150, 200, 250)' });
+    }
 
     const user = await User.findById(req.user._id);
     if (user.walletBalance < amount) {
