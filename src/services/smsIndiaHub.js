@@ -46,9 +46,40 @@ async function sendOtpSms(phone, otp) {
     PEId: peId,
   };
 
-  const response = await axios.get(url, { params, timeout: 10000 });
-  console.log('SMSINDIAHUB response:', response.data);
-  return response.data;
+  const timeout = parseInt(process.env.SMSINDIAHUB_TIMEOUT || '30000');
+  const maxAttempts = parseInt(process.env.SMSINDIAHUB_RETRIES || '2');
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await axios.get(url, { params, timeout });
+      const data = response.data;
+      console.log(`SMSINDIAHUB response (attempt ${attempt}/${maxAttempts}):`, JSON.stringify(data));
+
+      // SMSINDIAHUB returns HTTP 200 even on failure — the real status is in the body.
+      // Success is ErrorCode "000"/"0"/0; anything else is a provider-side rejection.
+      const errorCode = data && (data.ErrorCode ?? data.errorCode);
+      const isSuccess = errorCode === undefined
+        || errorCode === '000'
+        || errorCode === '0'
+        || errorCode === 0;
+
+      if (!isSuccess) {
+        const errMsg = (data && (data.ErrorMessage || data.errorMessage)) || 'Unknown provider error';
+        throw new Error(`SMSINDIAHUB rejected: [${errorCode}] ${errMsg}`);
+      }
+
+      return data;
+    } catch (err) {
+      lastError = err;
+      const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '');
+      console.error(`SMSINDIAHUB attempt ${attempt}/${maxAttempts} failed:`, err.message);
+      // Retry only on network/timeout errors, not on provider rejections
+      if (!isTimeout || attempt === maxAttempts) break;
+    }
+  }
+
+  throw lastError;
 }
 
 module.exports = { sendOtpSms };
