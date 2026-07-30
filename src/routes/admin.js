@@ -83,8 +83,9 @@ router.put('/users/:id/earnings', fullAdminOnly, updateUserEarnings);
 router.put('/users/:id/status', fullAdminOnly, updateUserStatus);
 router.delete('/users/:id', fullAdminOnly, deleteUser);
 router.get('/wallet-requests', getWalletRequests);
-// Approve/reject deposits & withdrawals — admin and superadmin only (managers cannot process)
-router.put('/wallet-requests/:id', fullAdminOnly, processWalletRequest);
+// Approve/reject deposits & withdrawals — any admin role (admin/manager/superadmin);
+// processedBy records who did it and is shown in the panel
+router.put('/wallet-requests/:id', processWalletRequest);
 router.post('/wallet-requests/bulk-delete', fullAdminOnly, bulkDeleteWalletRequests);
 router.get('/bets', getAllBets);
 router.post('/bets/delete', fullAdminOnly, deleteBets);
