@@ -68,12 +68,20 @@ const enforceOneDevice = async (userId, newToken, io) => {
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
+// Which website the request came from — 101dream users live in their own account space.
+// Frontends send { type: '101dream' } at login; anything else falls back to rushkroludo.
+const resolveSiteType = (req) => {
+  const t = req.body.type || req.body.siteType;
+  return t === '101dream' ? '101dream' : 'rushkroludo';
+};
+
 // @desc    Send OTP for login (supports email or mobile number)
 // @route   POST /api/auth/send-otp
 const sendOTP = async (req, res) => {
   try {
     const { loginMode } = req.body;
     const isPhoneLogin = loginMode === 'mobile';
+    const siteType = resolveSiteType(req);
 
     // ── Phone-based login ──
     if (isPhoneLogin) {
@@ -86,6 +94,7 @@ const sendOTP = async (req, res) => {
 
       const last10 = cleanPhone.slice(-10);
       let user = await User.findOne({
+        siteType,
         $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
       });
 
@@ -103,7 +112,7 @@ const sendOTP = async (req, res) => {
         await User.updateOne({ _id: user._id }, { otp, otpExpiry });
       } else {
         // New user — hold OTP in memory until verified (user created only after OTP confirmation)
-        pendingPhoneOtps.set(last10, { otp, otpExpiry });
+        pendingPhoneOtps.set(`${siteType}:${last10}`, { otp, otpExpiry });
       }
 
       try {
@@ -113,7 +122,7 @@ const sendOTP = async (req, res) => {
       } catch (smsError) {
         console.error('SMS sending error:', smsError);
         // Clean up pending entry if SMS failed for new user
-        if (!user) pendingPhoneOtps.delete(last10);
+        if (!user) pendingPhoneOtps.delete(`${siteType}:${last10}`);
         return res.status(500).json({ message: 'Failed to send SMS. Please try again or login with email.' });
       }
     }
@@ -129,7 +138,7 @@ const sendOTP = async (req, res) => {
       return res.status(400).json({ message: 'Please enter a valid email address' });
     }
 
-    let user = await User.findOne({ email });
+    let user = await User.findOne({ email, siteType });
 
     if (user) {
       if (user.status === 'blocked') {
@@ -148,7 +157,7 @@ const sendOTP = async (req, res) => {
       user.otpExpiry = otpExpiry;
       await user.save();
     } else {
-      user = await User.create({ email, name: null, otp, otpExpiry });
+      user = await User.create({ email, name: null, otp, otpExpiry, siteType });
     }
 
     const hasPhone = user && user.phone && String(user.phone).trim();
@@ -213,6 +222,7 @@ const verifyOTP = async (req, res) => {
   try {
     const { loginMode } = req.body;
     const isPhoneLogin = loginMode === 'mobile';
+    const siteType = resolveSiteType(req);
     const otp = typeof req.body.otp === 'string' ? req.body.otp.trim() : '';
 
     if (!otp) {
@@ -232,23 +242,24 @@ const verifyOTP = async (req, res) => {
 
       const last10 = cleanPhone.slice(-10);
       user = await User.findOne({
+        siteType,
         $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
       });
 
       if (!user) {
         // New user — verify against the pending OTP map
-        const pending = pendingPhoneOtps.get(last10);
+        const pending = pendingPhoneOtps.get(`${siteType}:${last10}`);
         if (!pending) return res.status(400).json({ message: 'OTP not found. Please request a new OTP.' });
         if (pending.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
         if (new Date() > pending.otpExpiry) {
-          pendingPhoneOtps.delete(last10);
+          pendingPhoneOtps.delete(`${siteType}:${last10}`);
           return res.status(400).json({ message: 'OTP expired' });
         }
         // OTP verified — find existing user (admin-created) or create new
-        const existingUser = await User.findOne({ phone: last10 });
+        const existingUser = await User.findOne({ phone: last10, siteType });
         const isNewUser = !existingUser;
-        user = existingUser || await User.create({ phone: last10, name: null });
-        pendingPhoneOtps.delete(last10);
+        user = existingUser || await User.create({ phone: last10, name: null, siteType });
+        pendingPhoneOtps.delete(`${siteType}:${last10}`);
 
         // Notify admins about new user registration
         if (isNewUser) {
@@ -271,6 +282,7 @@ const verifyOTP = async (req, res) => {
           upiId: user.upiId, upiNumber: user.upiNumber, walletBalance: user.walletBalance,
           isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, status: user.status,
           totalBetAmount: user.totalBetAmount, bonusClaimed: user.bonusClaimed,
+          siteType: user.siteType,
           token, needsUsername: true, needsPhone: false, needsProfile: true,
         });
       }
@@ -283,7 +295,7 @@ const verifyOTP = async (req, res) => {
         return res.status(400).json({ message: 'Email is required' });
       }
 
-      user = await User.findOne({ email });
+      user = await User.findOne({ email, siteType });
     }
 
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -337,6 +349,7 @@ const verifyOTP = async (req, res) => {
       status: user.status,
       totalBetAmount: user.totalBetAmount,
       bonusClaimed: user.bonusClaimed,
+      siteType: user.siteType,
       token,
       needsUsername,
       needsPhone,
@@ -365,7 +378,7 @@ const setUsername = async (req, res) => {
     // Apply referral code if provided and not already set
     const refCode = typeof req.body.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : '';
     if (refCode && !user.referredBy) {
-      const referrer = await User.findOne({ referralCode: refCode });
+      const referrer = await User.findOne({ referralCode: refCode, siteType: user.siteType });
       if (referrer && referrer._id.toString() !== user._id.toString()) {
         user.referredBy = referrer._id;
         await user.save();
@@ -419,7 +432,7 @@ const updateProfile = async (req, res) => {
     // Apply referral code if provided and not already set
     if (referralCode && !user.referredBy) {
       const refCode = String(referralCode).trim().toUpperCase();
-      const referrer = await User.findOne({ referralCode: refCode });
+      const referrer = await User.findOne({ referralCode: refCode, siteType: user.siteType });
       if (referrer && referrer._id.toString() !== user._id.toString()) {
         user.referredBy = referrer._id;
         await user.save();
@@ -488,6 +501,7 @@ const findEmailByPhone = async (req, res) => {
 
     // Search by phone or upiNumber fields (user may have saved their number in either)
     const users = await User.find({
+      siteType: resolveSiteType(req),
       $or: [
         { phone: { $regex: cleanPhone.slice(-10), $options: 'i' } },
         { upiNumber: { $regex: cleanPhone.slice(-10), $options: 'i' } },

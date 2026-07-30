@@ -83,7 +83,8 @@ router.put('/users/:id/earnings', fullAdminOnly, updateUserEarnings);
 router.put('/users/:id/status', fullAdminOnly, updateUserStatus);
 router.delete('/users/:id', fullAdminOnly, deleteUser);
 router.get('/wallet-requests', getWalletRequests);
-router.put('/wallet-requests/:id', processWalletRequest);
+// Approve/reject deposits & withdrawals — admin and superadmin only (managers cannot process)
+router.put('/wallet-requests/:id', fullAdminOnly, processWalletRequest);
 router.post('/wallet-requests/bulk-delete', fullAdminOnly, bulkDeleteWalletRequests);
 router.get('/bets', getAllBets);
 router.post('/bets/delete', fullAdminOnly, deleteBets);

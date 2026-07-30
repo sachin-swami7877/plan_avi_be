@@ -106,6 +106,7 @@ const createDepositRequest = async (req, res) => {
       type: 'deposit',
       utrNumber,
       screenshotUrl,
+      siteType: req.user.siteType || 'rushkroludo',
     });
 
     // Notify admins via socket
@@ -218,6 +219,7 @@ const createWithdrawalRequest = async (req, res) => {
       userId: req.user._id,
       amount: Number(amount),
       type: 'withdrawal',
+      siteType: req.user.siteType || 'rushkroludo',
     });
 
     await recordWalletTx(

@@ -22,6 +22,23 @@ const connectDB = async () => {
           console.log(`Dropped stale index: ${name}`);
         }
       }
+
+      // One-time: tag existing users with the default siteType so site-scoped
+      // login queries ({ email, siteType }) keep matching them
+      const tagged = await collection.updateMany(
+        { siteType: { $exists: false } },
+        { $set: { siteType: 'rushkroludo' } }
+      );
+      if (tagged.modifiedCount > 0) {
+        console.log(`Tagged ${tagged.modifiedCount} existing users with siteType=rushkroludo`);
+      }
+      const taggedWr = await conn.connection.db.collection('walletrequests').updateMany(
+        { siteType: { $exists: false } },
+        { $set: { siteType: 'rushkroludo' } }
+      );
+      if (taggedWr.modifiedCount > 0) {
+        console.log(`Tagged ${taggedWr.modifiedCount} existing wallet requests with siteType=rushkroludo`);
+      }
     } catch (indexErr) {
       // Ignore if index doesn't exist
     }

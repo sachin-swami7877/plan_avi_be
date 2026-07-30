@@ -28,6 +28,8 @@ async function getOrCreateSettings() {
 const getDashboardStats = async (req, res) => {
   try {
     const { period, from: fromStr, to: toStr } = req.query;
+    // Optional site scoping — each site's admin panel passes its own siteType
+    const sF = ['rushkroludo', '101dream'].includes(req.query.siteType) ? { siteType: req.query.siteType } : {};
 
     // Build date filter for period-based stats
     let dateFilter = {};
@@ -50,9 +52,9 @@ const getDashboardStats = async (req, res) => {
 
     // These always show current counts (no date filter for pending)
     const [totalUsers, pendingDeposits, pendingWithdrawals] = await Promise.all([
-      User.countDocuments(hasPeriodFilter ? dateFilter : {}),
-      WalletRequest.countDocuments({ type: 'deposit', status: 'pending' }),
-      WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending' }),
+      User.countDocuments(hasPeriodFilter ? { ...dateFilter, ...sF } : { ...sF }),
+      WalletRequest.countDocuments({ type: 'deposit', status: 'pending', ...sF }),
+      WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF }),
     ]);
 
     // Bet stats use date filter
@@ -197,6 +199,11 @@ const getUsers = async (req, res) => {
     const { role } = req.query;
     if (role && ['user', 'admin', 'manager'].includes(role)) {
       filter.role = role;
+    }
+    // Site filter — list rushkroludo and 101dream users separately
+    const { siteType } = req.query;
+    if (siteType && ['rushkroludo', '101dream'].includes(siteType)) {
+      filter.siteType = siteType;
     }
     if (search && search.trim()) {
       const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -512,10 +519,11 @@ const deleteUser = async (req, res) => {
 
 const getWalletRequests = async (req, res) => {
   try {
-    const { status, type, page = 1, limit = 25, from: fromStr, to: toStr, datePreset } = req.query;
+    const { status, type, page = 1, limit = 25, from: fromStr, to: toStr, datePreset, siteType } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (type) filter.type = type;
+    if (siteType && ['rushkroludo', '101dream'].includes(siteType)) filter.siteType = siteType;
 
     // Date filtering — all dates interpreted as IST
     if (fromStr && toStr) {
@@ -538,6 +546,7 @@ const getWalletRequests = async (req, res) => {
     const [requests, totalCount, totalAgg] = await Promise.all([
       WalletRequest.find(filter)
         .populate('userId', 'name email phone walletBalance upiId upiNumber bankAccountNumber bankIfscCode bankAccountHolder')
+        .populate('processedBy', 'name email role')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum),
@@ -1537,26 +1546,29 @@ const getPendingCounts = async (req, res) => {
 
     const mF = (d) => d ? { createdAt: { $gt: d } } : null;
 
+    // Optional site scoping for money counts (each site's admin panel passes its own siteType)
+    const sF = ['rushkroludo', '101dream'].includes(req.query.siteType) ? { siteType: req.query.siteType } : {};
+
     const [
       pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc,
       unreadDeposits, unreadWithdrawals,
       unreadLudo, unreadKyc,
       unreadAlertsDeposits, unreadAlertsWithdrawals, unreadAlertsLudo, unreadAlertsKyc,
     ] = await Promise.all([
-      WalletRequest.countDocuments({ type: 'deposit', status: 'pending' }),
-      WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending' }),
+      WalletRequest.countDocuments({ type: 'deposit', status: 'pending', ...sF }),
+      WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF }),
       LudoResultRequest.countDocuments({ status: 'pending' }),
       KycRequest.countDocuments({ status: 'pending' }),
       // Money badge unread
-      mF(moneyDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...mF(moneyDate) }) : Promise.resolve(null),
-      mF(moneyDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...mF(moneyDate) }) : Promise.resolve(null),
+      mF(moneyDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...sF, ...mF(moneyDate) }) : Promise.resolve(null),
+      mF(moneyDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF, ...mF(moneyDate) }) : Promise.resolve(null),
       // Ludo badge unread
       mF(ludoDate)  ? LudoResultRequest.countDocuments({ status: 'pending', ...mF(ludoDate) })  : Promise.resolve(null),
       // KYC badge unread
       mF(kycDate)   ? KycRequest.countDocuments({ status: 'pending', ...mF(kycDate) })           : Promise.resolve(null),
       // Alerts badge unread (all 4 categories since sinceAlerts)
-      mF(alertsDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...mF(alertsDate) }) : Promise.resolve(null),
-      mF(alertsDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...mF(alertsDate) }) : Promise.resolve(null),
+      mF(alertsDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...sF, ...mF(alertsDate) }) : Promise.resolve(null),
+      mF(alertsDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF, ...mF(alertsDate) }) : Promise.resolve(null),
       mF(alertsDate) ? LudoResultRequest.countDocuments({ status: 'pending', ...mF(alertsDate) })                 : Promise.resolve(null),
       mF(alertsDate) ? KycRequest.countDocuments({ status: 'pending', ...mF(alertsDate) })                        : Promise.resolve(null),
     ]);

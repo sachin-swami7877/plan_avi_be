@@ -143,6 +143,13 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  // Which website this account belongs to — same email/phone can exist once per site
+  siteType: {
+    type: String,
+    enum: ['rushkroludo', '101dream'],
+    default: 'rushkroludo',
+    index: true,
+  },
 }, {
   timestamps: true
 });
@@ -223,8 +230,9 @@ userSchema.methods.smartRefund = function (amount, paidFromDeposit, paidFromEarn
   this.walletBalance += amount;
 };
 
-// Partial unique indexes — only index non-null values, so multiple null emails/phones are allowed
-userSchema.index({ email: 1 }, { unique: true, partialFilterExpression: { email: { $type: 'string' } } });
-userSchema.index({ phone: 1 }, { unique: true, partialFilterExpression: { phone: { $type: 'string' } } });
+// Partial unique indexes — only index non-null values, so multiple null emails/phones are allowed.
+// Compound with siteType: the same email/phone can have one account per website (rushkroludo + 101dream).
+userSchema.index({ email: 1, siteType: 1 }, { unique: true, partialFilterExpression: { email: { $type: 'string' } } });
+userSchema.index({ phone: 1, siteType: 1 }, { unique: true, partialFilterExpression: { phone: { $type: 'string' } } });
 
 module.exports = mongoose.model('User', userSchema);
