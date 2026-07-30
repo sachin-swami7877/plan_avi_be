@@ -54,10 +54,6 @@ const adminSettingsSchema = new mongoose.Schema({
   ludoCommTier2Pct: { type: Number, default: 8 },
   // Tier 3: entry > tier2Max => ludoCommTier3Pct % commission
   ludoCommTier3Pct: { type: Number, default: 5 },
-  // Aviator: Coming Soon toggle — hides Aviator game for all users
-  aviatorComingSoon: { type: Boolean, default: false },
-  // Spinner: Coming Soon toggle — hides Spinner game for all users
-  spinnerComingSoon: { type: Boolean, default: false },
 }, {
   timestamps: true,
 });

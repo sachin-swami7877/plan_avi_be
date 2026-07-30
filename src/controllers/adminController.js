@@ -1191,8 +1191,6 @@ const getSettings = async (req, res) => {
       ludoCommTier3Pct: settings.ludoCommTier3Pct ?? 5,
       withdrawalsEnabled: settings.withdrawalsEnabled ?? true,
       withdrawalDisableReason: settings.withdrawalDisableReason || '',
-      aviatorComingSoon: settings.aviatorComingSoon ?? false,
-      spinnerComingSoon: settings.spinnerComingSoon ?? false,
     });
   } catch (error) {
     console.error(error);
@@ -1222,8 +1220,6 @@ const updateSettings = async (req, res) => {
       ludoEnabled,
       ludoDisableReason,
       ludoWarning,
-      aviatorComingSoon,
-      spinnerComingSoon,
     } = req.body;
 
     // Handle betsEnabled toggle (game engine + persist to DB)
@@ -1263,8 +1259,6 @@ const updateSettings = async (req, res) => {
     if (typeof ludoEnabled === 'boolean') settings.ludoEnabled = ludoEnabled;
     if (ludoDisableReason !== undefined) settings.ludoDisableReason = ludoDisableReason;
     if (ludoWarning !== undefined) settings.ludoWarning = ludoWarning;
-    if (typeof aviatorComingSoon === 'boolean') settings.aviatorComingSoon = aviatorComingSoon;
-    if (typeof spinnerComingSoon === 'boolean') settings.spinnerComingSoon = spinnerComingSoon;
     await settings.save();
 
     res.json({ message: 'Settings updated', betsEnabled: typeof betsEnabled === 'boolean' ? betsEnabled : undefined });
@@ -1426,21 +1420,6 @@ const getPublicUserWarning = async (req, res) => {
   try {
     const s = await getOrCreateSettings();
     res.json({ userWarning: s.userWarning || '' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-// @desc    Get game visibility status (public)
-// @route   GET /api/settings/aviator-status
-const getPublicAviatorStatus = async (req, res) => {
-  try {
-    const s = await getOrCreateSettings();
-    res.json({
-      aviatorComingSoon: s.aviatorComingSoon ?? false,
-      spinnerComingSoon: s.spinnerComingSoon ?? false,
-    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
@@ -2088,7 +2067,6 @@ module.exports = {
   getPublicLayout,
   getPublicUserWarning,
   getPublicLandingStats,
-  getPublicAviatorStatus,
   getPublicLogo,
   getLudoProfit,
   getAviatorProfit,
