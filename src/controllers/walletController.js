@@ -14,8 +14,9 @@ const { getTodayISTStart } = require('../utils/istDate');
 // @route   GET /api/wallet/payment-info
 const getPaymentInfo = async (req, res) => {
   try {
-    const { getSiteSettings } = require('../utils/siteSettings');
-    const settings = await getSiteSettings(req.user?.siteType);
+    const { getSiteSettings, siteFromReq } = require('../utils/siteSettings');
+    // Route is public — fall back to the ?type= the frontend sends
+    const settings = await getSiteSettings(req.user?.siteType || siteFromReq(req));
     res.json({
       qrCodeUrl: settings.qrCodeUrl || null,
       upiId: settings.upiId || null,
