@@ -31,6 +31,8 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175',
   'http://localhost:5176', 'http://localhost:5177', 'http://localhost:3000',
+  // 101dream frontend (shares this backend, users separated by siteType)
+  'https://101dream.vercel.app',
   ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : []),
 ];
 
