@@ -14,10 +14,8 @@ const { getTodayISTStart } = require('../utils/istDate');
 // @route   GET /api/wallet/payment-info
 const getPaymentInfo = async (req, res) => {
   try {
-    let settings = await AdminSettings.findOne({ key: 'main' });
-    if (!settings) {
-      settings = await AdminSettings.create({ key: 'main' });
-    }
+    const { getSiteSettings } = require('../utils/siteSettings');
+    const settings = await getSiteSettings(req.user?.siteType);
     res.json({
       qrCodeUrl: settings.qrCodeUrl || null,
       upiId: settings.upiId || null,
@@ -150,9 +148,9 @@ const createDepositRequest = async (req, res) => {
 // @route   POST /api/wallet/withdraw
 const createWithdrawalRequest = async (req, res) => {
   try {
-    // Check if withdrawals are enabled
-    const AdminSettings = require('../models/AdminSettings');
-    const adminSettings = await AdminSettings.findOne({ key: 'main' });
+    // Check if withdrawals are enabled (per-site setting)
+    const { getSiteSettings } = require('../utils/siteSettings');
+    const adminSettings = await getSiteSettings(req.user?.siteType);
     if (adminSettings && adminSettings.withdrawalsEnabled === false) {
       const reason = adminSettings.withdrawalDisableReason || 'Withdrawals are currently disabled.';
       return res.status(403).json({ message: reason });
@@ -273,9 +271,9 @@ const getWithdrawalInfo = async (req, res) => {
     const totalDeposited = user.totalDeposited || 0;
     const earnings = user.earningsBalance || 0;
 
-    // Check if withdrawals are enabled
-    const AdminSettings = require('../models/AdminSettings');
-    const adminSettings = await AdminSettings.findOne({ key: 'main' });
+    // Check if withdrawals are enabled (per-site setting)
+    const { getSiteSettings } = require('../utils/siteSettings');
+    const adminSettings = await getSiteSettings(req.user?.siteType);
     const withdrawalsEnabled = adminSettings?.withdrawalsEnabled ?? true;
     const withdrawalDisableReason = adminSettings?.withdrawalDisableReason || '';
 

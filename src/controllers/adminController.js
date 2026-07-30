@@ -17,10 +17,11 @@ const { sendPushNotification } = require('../config/firebase');
 const { getTodayISTStart, istStartOfDay, istEndOfDay } = require('../utils/istDate');
 
 // ──────────────────────── HELPERS ────────────────────────
-async function getOrCreateSettings() {
-  let s = await AdminSettings.findOne({ key: 'main' });
-  if (!s) s = await AdminSettings.create({ key: 'main' });
-  return s;
+const { getSiteSettings, siteFromReq } = require('../utils/siteSettings');
+
+// Site-scoped settings: rushkroludo → 'main' doc, 101dream → '101dream' doc
+async function getOrCreateSettings(siteType) {
+  return getSiteSettings(siteType);
 }
 
 // ──────────────────────── DASHBOARD ────────────────────────
@@ -1153,12 +1154,13 @@ const getSpinnerRecords = async (req, res) => {
 const getSettings = async (req, res) => {
   try {
     const gameEngine = req.app.get('gameEngine');
-    const settings = await getOrCreateSettings();
+    const site = siteFromReq(req);
+    const settings = await getOrCreateSettings(site);
     // Always read betsEnabled from DB (authoritative) — not game engine memory
-    // which may be stale after a server restart before DB load completes
+    // which may be stale after a server restart before DB load completes.
+    // The aviator engine is owned by the 101dream settings doc — only sync from it.
     const dbBetsEnabled = settings.betsEnabled ?? true;
-    // Silently sync game engine memory if it doesn't match DB (no socket emit)
-    if (gameEngine.getBetsEnabled() !== dbBetsEnabled) {
+    if (site === '101dream' && gameEngine.getBetsEnabled() !== dbBetsEnabled) {
       gameEngine.betsEnabled = dbBetsEnabled;
       console.log(`⚙️  Synced game engine betsEnabled to DB value: ${dbBetsEnabled}`);
     }
@@ -1229,7 +1231,7 @@ const updateSettings = async (req, res) => {
     }
 
     // Persist all settings to AdminSettings
-    const settings = await getOrCreateSettings();
+    const settings = await getOrCreateSettings(siteFromReq(req));
     if (upiId !== undefined) settings.upiId = upiId;
     if (upiNumber !== undefined) settings.upiNumber = upiNumber;
     if (supportPhone !== undefined) settings.supportPhone = supportPhone;
@@ -1283,7 +1285,7 @@ const uploadQrCode = async (req, res) => {
 
     const url = await uploadFromBuffer(compressedBuffer, 'lean_aviator/qr', 'image/png');
 
-    const settings = await getOrCreateSettings();
+    const settings = await getOrCreateSettings(siteFromReq(req));
     settings.qrCodeUrl = url;
     await settings.save();
 
@@ -1307,7 +1309,7 @@ const uploadLogo = async (req, res) => {
 
     const url = await uploadFromBuffer(compressedBuffer, 'lean_aviator/logo', 'image/png');
 
-    const settings = await getOrCreateSettings();
+    const settings = await getOrCreateSettings(siteFromReq(req));
     settings.logoUrl = url;
     await settings.save();
 
@@ -1322,7 +1324,7 @@ const uploadLogo = async (req, res) => {
 // @route   GET /api/settings/logo
 const getPublicLogo = async (req, res) => {
   try {
-    const s = await getOrCreateSettings();
+    const s = await getOrCreateSettings(siteFromReq(req));
     res.json({ logoUrl: s.logoUrl || null });
   } catch (error) {
     console.error(error);
@@ -1363,7 +1365,7 @@ const getBonusRecords = async (req, res) => {
 // @route   GET /api/settings/support
 const getPublicSupport = async (req, res) => {
   try {
-    const s = await getOrCreateSettings();
+    const s = await getOrCreateSettings(siteFromReq(req));
     res.json({ 
       supportPhone: s.supportPhone, 
       supportWhatsApp: s.supportWhatsApp,
@@ -1379,7 +1381,7 @@ const getPublicSupport = async (req, res) => {
 // @route   GET /api/settings/terms
 const getPublicTerms = async (req, res) => {
   try {
-    const s = await getOrCreateSettings();
+    const s = await getOrCreateSettings(siteFromReq(req));
     res.json({ termsDeposit: s.termsDeposit, termsWithdrawal: s.termsWithdrawal, termsGeneral: s.termsGeneral });
   } catch (error) {
     console.error(error);
@@ -1391,7 +1393,7 @@ const getPublicTerms = async (req, res) => {
 // @route   GET /api/settings/layout
 const getPublicLayout = async (req, res) => {
   try {
-    const s = await getOrCreateSettings();
+    const s = await getOrCreateSettings(siteFromReq(req));
     res.json({ layout: s.layout || false });
   } catch (error) {
     console.error(error);
@@ -1403,7 +1405,7 @@ const getPublicLayout = async (req, res) => {
 // @route   GET /api/settings/landing-stats
 const getPublicLandingStats = async (req, res) => {
   try {
-    const s = await getOrCreateSettings();
+    const s = await getOrCreateSettings(siteFromReq(req));
     res.json({
       landingPlayers: s.landingPlayers || '1000+',
       landingWonToday: s.landingWonToday || '₹1K+',
@@ -1418,7 +1420,7 @@ const getPublicLandingStats = async (req, res) => {
 // @route   GET /api/settings/user-warning
 const getPublicUserWarning = async (req, res) => {
   try {
-    const s = await getOrCreateSettings();
+    const s = await getOrCreateSettings(siteFromReq(req));
     res.json({ userWarning: s.userWarning || '' });
   } catch (error) {
     console.error(error);
@@ -1992,6 +1994,13 @@ const getAdminCreditLog = async (req, res) => {
     const skip = (pageNum - 1) * limitNum;
 
     const filter = { category: { $in: ['admin_credit', 'admin_debit'] } };
+
+    // Site scoping — each site's admin panel passes its own siteType
+    const { siteType } = req.query;
+    if (['rushkroludo', '101dream'].includes(siteType)) {
+      const siteUserIds = await User.find({ siteType }).select('_id').lean();
+      filter.userId = { $in: siteUserIds.map(u => u._id) };
+    }
 
     // Non-superadmin admins can only see records created by non-superadmin admins
     if (req.user.role !== 'superadmin') {

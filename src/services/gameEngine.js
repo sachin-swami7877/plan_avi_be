@@ -51,8 +51,9 @@ class GameEngine {
   async start() {
     // Load persisted betsEnabled from database
     try {
-      const AdminSettings = require('../models/AdminSettings');
-      const settings = await AdminSettings.findOne({ key: 'main' });
+      // Aviator runs for the 101dream site — its settings doc owns betsEnabled
+      const { getSiteSettings } = require('../utils/siteSettings');
+      const settings = await getSiteSettings('101dream');
       if (settings && typeof settings.betsEnabled === 'boolean') {
         this.betsEnabled = settings.betsEnabled;
         console.log(`🎮 Loaded betsEnabled from DB: ${this.betsEnabled}`);

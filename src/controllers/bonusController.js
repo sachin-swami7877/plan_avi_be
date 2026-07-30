@@ -11,8 +11,8 @@ const getBonusStatus = async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    let settings = await AdminSettings.findOne({ key: 'main' });
-    if (!settings) settings = await AdminSettings.create({ key: 'main' });
+    const { getSiteSettings } = require('../utils/siteSettings');
+    const settings = await getSiteSettings(req.user?.siteType);
 
     const threshold = settings.bonusMinBet;     // e.g. 1000
     const cashback = settings.bonusCashback;     // e.g. 100
@@ -86,8 +86,8 @@ const claimBonus = async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    let settings = await AdminSettings.findOne({ key: 'main' });
-    if (!settings) settings = await AdminSettings.create({ key: 'main' });
+    const { getSiteSettings } = require('../utils/siteSettings');
+    const settings = await getSiteSettings(req.user?.siteType);
 
     const threshold = settings.bonusMinBet;
     const cashback = settings.bonusCashback;
