@@ -178,9 +178,14 @@ const sendAdminNotification = async (req, res) => {
       return res.status(400).json({ message: 'Notification message is required' });
     }
 
+    // Broadcast only to the admin's own site — rushkroludo and 101dream users
+    // share this backend but must never see each other's notifications
+    const siteType = req.user.siteType || 'rushkroludo';
+
     // Get all active users with FCM tokens
     const users = await User.find({
       status: 'active',
+      siteType,
       fcmTokens: { $exists: true, $ne: [] }
     }).select('_id fcmTokens').lean();
 
@@ -206,10 +211,12 @@ const sendAdminNotification = async (req, res) => {
       imageUrl = `${baseUrl}/uploads/${filename}`;
     }
 
+    const defaultTitle = siteType === '101dream' ? '101Dream' : 'RushkroLudo';
+
     // Create notifications for all users (for database/history)
     const notificationDocs = users.map(user => ({
       userId: user._id,
-      title: title || 'RushkroLudo',
+      title: title || defaultTitle,
       message,
       type: 'broadcast',
       imageUrl,
@@ -222,7 +229,7 @@ const sendAdminNotification = async (req, res) => {
 
     // Send actual FCM push notifications to all users
     const allTokens = users.flatMap(user => user.fcmTokens).filter(Boolean);
-    const notifTitle = title || 'RushkroLudo';
+    const notifTitle = title || defaultTitle;
 
     let pushResult = { successCount: 0, failureCount: 0 };
     if (allTokens.length > 0) {
@@ -246,7 +253,8 @@ const sendAdminNotification = async (req, res) => {
         type: 'broadcast',
         createdAt: new Date()
       };
-      io.emit('notification:broadcast', notificationData);
+      // Room-scoped: only sockets of this site's users receive it
+      io.to(`site_${siteType}`).emit('notification:broadcast', notificationData);
     }
 
     res.json({
@@ -267,14 +275,17 @@ const sendAdminNotification = async (req, res) => {
 // @route   GET /api/admin/notifications/reach
 const getNotificationReach = async (req, res) => {
   try {
+    // Scope stats to the admin's own site (rushkroludo vs 101dream)
+    const siteType = req.user.siteType || 'rushkroludo';
     const [totalActive, withTokens, totalTokens] = await Promise.all([
-      User.countDocuments({ status: 'active' }),
+      User.countDocuments({ status: 'active', siteType }),
       User.countDocuments({
         status: 'active',
+        siteType,
         fcmTokens: { $exists: true, $ne: [] },
       }),
       User.aggregate([
-        { $match: { status: 'active', fcmTokens: { $exists: true, $ne: [] } } },
+        { $match: { status: 'active', siteType, fcmTokens: { $exists: true, $ne: [] } } },
         { $project: { tokenCount: { $size: '$fcmTokens' } } },
         { $group: { _id: null, total: { $sum: '$tokenCount' } } },
       ]),

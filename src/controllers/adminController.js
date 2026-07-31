@@ -1607,6 +1607,67 @@ const exportUsers = async (req, res) => {
   }
 };
 
+// ──────────────────────── DEPOSIT USERS REPORT (SUPER ADMIN) ────────────────────────
+
+// @desc    Unique depositor report — one row per user (latest approved deposit in range)
+// @route   GET /api/admin/reports/deposit-users
+// @query   siteType, from, to (YYYY-MM-DD, IST), minAmount, maxAmount
+const getDepositUsersReport = async (req, res) => {
+  try {
+    const { siteType, from: fromStr, to: toStr, minAmount, maxAmount } = req.query;
+
+    const match = { type: 'deposit', status: 'approved' };
+    if (siteType && ['rushkroludo', '101dream'].includes(siteType)) match.siteType = siteType;
+
+    if (fromStr && toStr) {
+      match.createdAt = { $gte: istStartOfDay(fromStr), $lte: istEndOfDay(toStr) };
+    } else if (fromStr) {
+      match.createdAt = { $gte: istStartOfDay(fromStr) };
+    } else if (toStr) {
+      match.createdAt = { $lte: istEndOfDay(toStr) };
+    }
+
+    const min = Number(minAmount);
+    const max = Number(maxAmount);
+    if (!isNaN(min) && minAmount !== '' && minAmount !== undefined) match.amount = { ...(match.amount || {}), $gte: min };
+    if (!isNaN(max) && maxAmount !== '' && maxAmount !== undefined) match.amount = { ...(match.amount || {}), $lte: max };
+
+    // One row per user — latest approved deposit in the filtered range
+    const rows = await WalletRequest.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: '$userId',
+          amount: { $first: '$amount' },
+          depositedAt: { $first: '$createdAt' },
+          depositCount: { $sum: 1 },
+          totalDeposited: { $sum: '$amount' },
+        },
+      },
+      { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 1,
+          amount: 1,
+          depositedAt: 1,
+          depositCount: 1,
+          totalDeposited: 1,
+          name: { $ifNull: ['$user.name', '—'] },
+          phone: { $ifNull: ['$user.phone', '—'] },
+        },
+      },
+      { $sort: { depositedAt: -1 } },
+    ]);
+
+    res.json({ rows, totalUsers: rows.length });
+  } catch (error) {
+    console.error('getDepositUsersReport error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 // ──────────────────────── PROFIT PAGE ────────────────────────
 
 const getLudoProfit = async (req, res) => {
@@ -2084,4 +2145,5 @@ module.exports = {
   getCleanupPreview,
   exportUsers,
   getAdminCreditLog,
+  getDepositUsersReport,
 };

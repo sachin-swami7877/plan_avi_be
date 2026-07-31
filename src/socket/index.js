@@ -65,6 +65,8 @@ const initSocket = (io) => {
     // Join user-specific room if authenticated
     if (socket.user) {
       socket.join(`user_${socket.user._id}`);
+      // Site room so broadcasts reach only this website's users (rushkroludo vs 101dream)
+      socket.join(`site_${socket.user.siteType || 'rushkroludo'}`);
       console.log(`👤 User ${socket.user.name} joined room user_${socket.user._id}`);
 
       // Track active user (mark hidden super admins)

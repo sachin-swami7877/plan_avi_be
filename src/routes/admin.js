@@ -44,6 +44,7 @@ const {
   getCleanupPreview,
   exportUsers,
   getAdminCreditLog,
+  getDepositUsersReport,
 } = require('../controllers/adminController');
 const { getAdminReferrals, adjustCommission, getAdminAllReferredUsers, getAdminCommissionHistory } = require('../controllers/referralController');
 const {
@@ -114,6 +115,9 @@ router.get('/bonus-records', getBonusRecords);
 
 // Export
 router.get('/export/users', fullAdminOnly, exportUsers);
+
+// Deposit Users report (super admin only)
+router.get('/reports/deposit-users', superAdminOnly, getDepositUsersReport);
 
 // Admin Credit/Debit Log (super admin only — fullAdminOnly allows admin+superadmin)
 router.get('/credit-log', fullAdminOnly, getAdminCreditLog);
