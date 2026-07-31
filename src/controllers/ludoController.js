@@ -390,7 +390,7 @@ const joinMatch = async (req, res) => {
 
     io.emit('ludo:match-live', { matchId: match._id, match: match.toObject ? match.toObject() : match });
     io.emit('ludo:waiting-updated');
-    io.to('admins').emit('admin:ludo-match-live', { matchId: match._id });
+    io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:ludo-match-live', { matchId: match._id });
 
     // Notify creator that opponent joined
     const creatorNotif = await Notification.create({
@@ -712,7 +712,7 @@ const submitWinDispute = async (req, res) => {
     });
 
     const io = req.app.get('io');
-    io.to('admins').emit('admin:ludo-result-request', {
+    io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:ludo-result-request', {
       requestId: request._id,
       matchId: match._id,
       userName: req.user.name,
@@ -746,7 +746,8 @@ const submitWinDispute = async (req, res) => {
     sendPushToAdmins(
       'Ludo Win Dispute',
       `${req.user.name} ne win dispute submit kiya - Rs.${match.entryAmount} match`,
-      { type: 'ludo_dispute' }
+      { type: 'ludo_dispute' },
+      req.user.siteType || 'rushkroludo'
     );
 
     res.status(201).json({ message: 'Win dispute submitted. Admin will review and decide.', request: { _id: request._id } });
@@ -1039,7 +1040,7 @@ const submitResult = async (req, res) => {
       });
     }
 
-    io.to('admins').emit('admin:ludo-result-request', {
+    io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:ludo-result-request', {
       requestId: request._id,
       matchId: match._id,
       userName: req.user.name,
@@ -1065,7 +1066,8 @@ const submitResult = async (req, res) => {
     sendPushToAdmins(
       'Ludo Result Submitted',
       `${req.user.name} ne Rs.${match.entryAmount} match ka result submit kiya`,
-      { type: 'ludo_result' }
+      { type: 'ludo_result' },
+      req.user.siteType || 'rushkroludo'
     );
 
     console.log('[submitResult] SUCCESS: requestId:', request._id, '| matchId:', matchId, '| user:', req.user?.name);
@@ -1158,7 +1160,7 @@ const submitResultBase64 = async (req, res) => {
       });
     }
 
-    io.to('admins').emit('admin:ludo-result-request', {
+    io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:ludo-result-request', {
       requestId: request._id,
       matchId: match._id,
       userName: req.user.name,
@@ -1183,7 +1185,8 @@ const submitResultBase64 = async (req, res) => {
     sendPushToAdmins(
       'Ludo Result Submitted',
       `${req.user.name} ne Rs.${match.entryAmount} match ka result submit kiya`,
-      { type: 'ludo_result' }
+      { type: 'ludo_result' },
+      req.user.siteType || 'rushkroludo'
     );
 
     console.log('[submitResultBase64] SUCCESS: requestId:', request._id, '| matchId:', matchId, '| user:', req.user?.name);
@@ -1266,7 +1269,7 @@ const submitLoss = async (req, res) => {
       });
     }
 
-    io.to('admins').emit('admin:ludo-result-request', { requestId: request._id, matchId: match._id, userName: req.user.name });
+    io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:ludo-result-request', { requestId: request._id, matchId: match._id, userName: req.user.name });
 
     // Notify the OTHER player that this user submitted loss
     const otherPlayer = match.players.find((p) => p.userId.toString() !== userId);

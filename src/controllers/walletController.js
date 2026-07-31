@@ -108,9 +108,10 @@ const createDepositRequest = async (req, res) => {
       siteType: req.user.siteType || 'rushkroludo',
     });
 
-    // Notify admins via socket
+    // Notify admins of this website only
     const io = req.app.get('io');
-    io.to('admins').emit('admin:wallet-request', {
+    const adminRoom = `admins_${req.user.siteType || 'rushkroludo'}`;
+    io.to(adminRoom).emit('admin:wallet-request', {
       request: walletRequest,
       userName: req.user.name,
       userPhone: req.user.phone,
@@ -131,7 +132,8 @@ const createDepositRequest = async (req, res) => {
     sendPushToAdmins(
       'New Deposit Request',
       `${req.user.name} ne Rs.${amount} deposit request bheji hai`,
-      { type: 'deposit_request' }
+      { type: 'deposit_request' },
+      req.user.siteType || 'rushkroludo'
     );
 
     res.status(201).json({
@@ -227,9 +229,10 @@ const createWithdrawalRequest = async (req, res) => {
       balBefore, user.walletBalance, walletRequest._id
     );
 
-    // Notify admins via socket
+    // Notify admins of this website only
     const io = req.app.get('io');
-    io.to('admins').emit('admin:withdrawal-request', {
+    const adminRoom = `admins_${req.user.siteType || 'rushkroludo'}`;
+    io.to(adminRoom).emit('admin:withdrawal-request', {
       request: walletRequest,
       userName: req.user.name,
       userPhone: req.user.phone,
@@ -250,7 +253,8 @@ const createWithdrawalRequest = async (req, res) => {
     sendPushToAdmins(
       'New Withdrawal Request',
       `${req.user.name} ne Rs.${amount} withdrawal request bheji hai`,
-      { type: 'withdrawal_request' }
+      { type: 'withdrawal_request' },
+      req.user.siteType || 'rushkroludo'
     );
 
     res.status(201).json({
@@ -380,14 +384,14 @@ const cancelWalletRequest = async (req, res) => {
 
       // Notify admin
       const io = req.app.get('io');
-      if (io) io.to('admins').emit('admin:wallet-request', { type: 'cancelled' });
+      if (io) io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:wallet-request', { type: 'cancelled' });
 
       return res.json({ message: 'Withdrawal cancelled. Amount refunded.', newBalance });
     }
 
     // Deposit cancel — no refund needed (money not credited yet)
     const io = req.app.get('io');
-    if (io) io.to('admins').emit('admin:wallet-request', { type: 'cancelled' });
+    if (io) io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:wallet-request', { type: 'cancelled' });
 
     res.json({ message: 'Deposit request cancelled.' });
   } catch (error) {

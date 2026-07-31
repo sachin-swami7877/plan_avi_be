@@ -267,6 +267,8 @@ const getUsers = async (req, res) => {
 const createUser = async (req, res) => {
   try {
     const { email, name, walletBalance, phone, role } = req.body;
+    // New users belong to the website whose admin panel created them
+    const newUserSite = siteFromReq(req);
     if (!name) return res.status(400).json({ message: 'Name is required' });
 
     if (!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
@@ -274,11 +276,11 @@ const createUser = async (req, res) => {
     if (email) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(email)) return res.status(400).json({ message: 'Invalid email format' });
-      const existing = await User.findOne({ email: email.toLowerCase() });
+      const existing = await User.findOne({ email: email.toLowerCase(), siteType: newUserSite });
       if (existing) return res.status(400).json({ message: 'User with this email already exists' });
     }
     if (phone) {
-      const existing = await User.findOne({ phone: phone.trim() });
+      const existing = await User.findOne({ phone: phone.trim(), siteType: newUserSite });
       if (existing) return res.status(400).json({ message: 'User with this phone already exists' });
     }
 
@@ -294,6 +296,7 @@ const createUser = async (req, res) => {
       depositBalance: initBalance,
       earningsBalance: 0,
       role: userRole,
+      siteType: newUserSite,
     });
 
     res.status(201).json({ _id: user._id, name: user.name, email: user.email, phone: user.phone, walletBalance: user.walletBalance, role: user.role });
@@ -867,15 +870,31 @@ const getWinningBets = async (req, res) => {
 const getAdminNotifications = async (req, res) => {
   try {
     const KycRequest = require('../models/KycRequest');
+
+    // Site scoping — each panel only lists requests raised on its own website.
+    // Wallet requests and ludo matches carry siteType; KYC is scoped via its user.
+    const siteType = ['rushkroludo', '101dream'].includes(req.query.siteType) ? req.query.siteType : null;
+    const sF = siteType ? { siteType } : {};
+    let kycFilter = { status: 'pending' };
+    let ludoFilter = { status: 'pending' };
+    if (siteType) {
+      const [siteUserIds, siteMatchIds] = await Promise.all([
+        User.find({ siteType }).select('_id').lean(),
+        LudoMatch.find({ siteType }).select('_id').lean(),
+      ]);
+      kycFilter.userId = { $in: siteUserIds.map((u) => u._id) };
+      ludoFilter.matchId = { $in: siteMatchIds.map((m) => m._id) };
+    }
+
     const [walletRequests, ludoRequests, kycRequests] = await Promise.all([
-      WalletRequest.find({ status: 'pending' })
+      WalletRequest.find({ status: 'pending', ...sF })
         .populate('userId', 'name phone')
         .sort({ createdAt: -1 })
         .limit(50),
-      LudoResultRequest.find({ status: 'pending' })
+      LudoResultRequest.find(ludoFilter)
         .sort({ createdAt: -1 })
         .limit(50),
-      KycRequest.find({ status: 'pending' })
+      KycRequest.find(kycFilter)
         .populate('userId', 'name phone')
         .sort({ createdAt: -1 })
         .limit(50),
@@ -1527,8 +1546,21 @@ const getPendingCounts = async (req, res) => {
 
     const mF = (d) => d ? { createdAt: { $gt: d } } : null;
 
-    // Optional site scoping for money counts (each site's admin panel passes its own siteType)
-    const sF = ['rushkroludo', '101dream'].includes(req.query.siteType) ? { siteType: req.query.siteType } : {};
+    // Optional site scoping (each site's admin panel passes its own siteType).
+    // Wallet requests carry siteType; KYC is scoped via its user, ludo via its match.
+    const siteType = ['rushkroludo', '101dream'].includes(req.query.siteType) ? req.query.siteType : null;
+    const sF = siteType ? { siteType } : {};
+    let kF = {};   // KYC scope
+    let lF = {};   // Ludo result scope
+    if (siteType) {
+      const LudoMatchModel = require('../models/LudoMatch');
+      const [siteUserIds, siteMatchIds] = await Promise.all([
+        User.find({ siteType }).select('_id').lean(),
+        LudoMatchModel.find({ siteType }).select('_id').lean(),
+      ]);
+      kF = { userId: { $in: siteUserIds.map((u) => u._id) } };
+      lF = { matchId: { $in: siteMatchIds.map((m) => m._id) } };
+    }
 
     const [
       pendingDeposits, pendingWithdrawals, pendingLudo, pendingKyc,
@@ -1538,20 +1570,20 @@ const getPendingCounts = async (req, res) => {
     ] = await Promise.all([
       WalletRequest.countDocuments({ type: 'deposit', status: 'pending', ...sF }),
       WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF }),
-      LudoResultRequest.countDocuments({ status: 'pending' }),
-      KycRequest.countDocuments({ status: 'pending' }),
+      LudoResultRequest.countDocuments({ status: 'pending', ...lF }),
+      KycRequest.countDocuments({ status: 'pending', ...kF }),
       // Money badge unread
       mF(moneyDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...sF, ...mF(moneyDate) }) : Promise.resolve(null),
       mF(moneyDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF, ...mF(moneyDate) }) : Promise.resolve(null),
       // Ludo badge unread
-      mF(ludoDate)  ? LudoResultRequest.countDocuments({ status: 'pending', ...mF(ludoDate) })  : Promise.resolve(null),
+      mF(ludoDate)  ? LudoResultRequest.countDocuments({ status: 'pending', ...lF, ...mF(ludoDate) })  : Promise.resolve(null),
       // KYC badge unread
-      mF(kycDate)   ? KycRequest.countDocuments({ status: 'pending', ...mF(kycDate) })           : Promise.resolve(null),
+      mF(kycDate)   ? KycRequest.countDocuments({ status: 'pending', ...kF, ...mF(kycDate) })           : Promise.resolve(null),
       // Alerts badge unread (all 4 categories since sinceAlerts)
       mF(alertsDate) ? WalletRequest.countDocuments({ type: 'deposit',    status: 'pending', ...sF, ...mF(alertsDate) }) : Promise.resolve(null),
       mF(alertsDate) ? WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF, ...mF(alertsDate) }) : Promise.resolve(null),
-      mF(alertsDate) ? LudoResultRequest.countDocuments({ status: 'pending', ...mF(alertsDate) })                 : Promise.resolve(null),
-      mF(alertsDate) ? KycRequest.countDocuments({ status: 'pending', ...mF(alertsDate) })                        : Promise.resolve(null),
+      mF(alertsDate) ? LudoResultRequest.countDocuments({ status: 'pending', ...lF, ...mF(alertsDate) })         : Promise.resolve(null),
+      mF(alertsDate) ? KycRequest.countDocuments({ status: 'pending', ...kF, ...mF(alertsDate) })                : Promise.resolve(null),
     ]);
 
     const unreadAlerts = alertsDate

@@ -80,10 +80,14 @@ const initSocket = (io) => {
       activeUsers.get(userId).add(socket.id);
       broadcastActiveCount();
 
-      // Join admin room if admin or subAdmin
+      // Join admin rooms if admin or subAdmin.
+      // 'admins' carries system-wide events; 'admins_<site>' carries events raised
+      // by that website's users (deposits, withdrawals, KYC, new signups, ludo).
       if (socket.user.isAdmin || socket.user.isSubAdmin) {
+        const adminSite = socket.user.siteType || 'rushkroludo';
         socket.join('admins');
-        console.log(`👑 Admin ${socket.user.name} joined admin room`);
+        socket.join(`admins_${adminSite}`);
+        console.log(`👑 Admin ${socket.user.name} joined admin rooms (${adminSite})`);
       }
     }
 

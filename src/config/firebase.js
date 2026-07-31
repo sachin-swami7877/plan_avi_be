@@ -131,15 +131,18 @@ async function sendPushNotification(userId, tokens, title, body, data = {}) {
 }
 
 /**
- * Send push to all admin users.
+ * Send push to admin users. Pass siteType to reach only that website's admins
+ * (a 101dream deposit must not notify rushkroludo admins, and vice versa).
  */
-async function sendPushToAdmins(title, body, data = {}) {
+async function sendPushToAdmins(title, body, data = {}, siteType) {
   if (!messaging) return;
   const User = require('../models/User');
-  const admins = await User.find({
+  const filter = {
     $or: [{ isAdmin: true }, { isSubAdmin: true }],
     fcmTokens: { $exists: true, $ne: [] },
-  }).select('_id fcmTokens');
+  };
+  if (['rushkroludo', '101dream'].includes(siteType)) filter.siteType = siteType;
+  const admins = await User.find(filter).select('_id fcmTokens');
 
   for (const admin of admins) {
     await sendPushNotification(admin._id, admin.fcmTokens, title, body, data);

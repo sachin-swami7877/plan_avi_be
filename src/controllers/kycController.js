@@ -81,7 +81,9 @@ const submitKyc = async (req, res) => {
           message: 'Aapki KYC request submit ho gayi hai. Admin review karenge aur aapko notify karenge.',
         });
 
-        const admins = await User.find({ $or: [{ isAdmin: true }, { isSubAdmin: true }] }).select('_id fcmTokens');
+        // Only notify admins of the website this user belongs to
+        const userSite = updatedUser.siteType || 'rushkroludo';
+        const admins = await User.find({ $or: [{ isAdmin: true }, { isSubAdmin: true }], siteType: userSite }).select('_id fcmTokens');
         await Promise.all(admins.map(a => Notification.create({
           userId: a._id,
           type: 'kyc',
@@ -92,12 +94,13 @@ const submitKyc = async (req, res) => {
         sendPushToAdmins(
           'New KYC Request',
           `${updatedUser.name} (${updatedUser.phone}) ne KYC submit ki hai. Review karein.`,
-          { type: 'kyc_submitted' }
+          { type: 'kyc_submitted' },
+          userSite
         );
 
         const io = req.app.get('io');
         if (io) {
-          io.to('admins').emit('admin:kyc-request', {
+          io.to(`admins_${userSite}`).emit('admin:kyc-request', {
             userId: updatedUser._id,
             userName: updatedUser.name,
             userPhone: updatedUser.phone,

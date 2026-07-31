@@ -264,11 +264,12 @@ const verifyOTP = async (req, res) => {
         // Notify admins about new user registration
         if (isNewUser) {
           const io = req.app.get('io');
-          if (io) io.to('admins').emit('admin:new-user', { phone: last10, userId: user._id });
+          if (io) io.to(`admins_${siteType}`).emit('admin:new-user', { phone: last10, userId: user._id });
           sendPushToAdmins(
             'New User Registered',
             `New user registered with phone ${last10}`,
-            { type: 'new_user' }
+            { type: 'new_user' },
+            siteType
           );
         }
 
@@ -327,11 +328,12 @@ const verifyOTP = async (req, res) => {
     // Notify admins if this is a brand new user (created < 5 min ago, no name yet)
     if (needsProfile && user.createdAt && (Date.now() - new Date(user.createdAt).getTime()) < 5 * 60 * 1000) {
       const io = req.app.get('io');
-      if (io) io.to('admins').emit('admin:new-user', { email: user.email, phone: user.phone, userId: user._id });
+      if (io) io.to(`admins_${user.siteType || 'rushkroludo'}`).emit('admin:new-user', { email: user.email, phone: user.phone, userId: user._id });
       sendPushToAdmins(
         'New User Registered',
         `New user registered: ${user.email || user.phone}`,
-        { type: 'new_user' }
+        { type: 'new_user' },
+        user.siteType || 'rushkroludo'
       );
     }
 
@@ -532,11 +534,14 @@ const findEmailByPhone = async (req, res) => {
 // ──────────────────────── ADMIN AUTH ────────────────────────
 
 // Helper: find admin/manager user by phone (last 10 digits)
-const findAdminByPhone = async (rawPhone) => {
+const findAdminByPhone = async (rawPhone, siteType = 'rushkroludo') => {
   const cleanPhone = (typeof rawPhone === 'string' ? rawPhone.trim() : '').replace(/[^0-9]/g, '');
   if (!cleanPhone || cleanPhone.length < 10) return { error: 'Please enter a valid 10-digit mobile number', status: 400 };
   const last10 = cleanPhone.slice(-10);
+  // The same phone can be an admin on both websites — log them into the one whose
+  // panel they opened, so their socket rooms and scoped data match that site.
   const user = await User.findOne({
+    siteType,
     $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
   });
   if (!user) return { error: 'No account found with this mobile number', status: 404 };
@@ -550,7 +555,7 @@ const findAdminByPhone = async (rawPhone) => {
 // @route   POST /api/auth/admin/send-otp
 const adminSendOTP = async (req, res) => {
   try {
-    const result = await findAdminByPhone(req.body.phone);
+    const result = await findAdminByPhone(req.body.phone, resolveSiteType(req));
     if (result.error) return res.status(result.status).json({ message: result.error });
     const { user, last10 } = result;
 
@@ -576,7 +581,7 @@ const adminSendOTP = async (req, res) => {
 // @route   POST /api/auth/admin/verify-otp
 const adminVerifyOTP = async (req, res) => {
   try {
-    const result = await findAdminByPhone(req.body.phone);
+    const result = await findAdminByPhone(req.body.phone, resolveSiteType(req));
     if (result.error) return res.status(result.status).json({ message: result.error });
     const { user } = result;
 
@@ -595,7 +600,7 @@ const adminVerifyOTP = async (req, res) => {
     res.json({
       _id: user._id, name: user.name, email: user.email, phone: user.phone,
       role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin, isSuperAdmin: user.isSuperAdmin,
-      status: user.status, token,
+      status: user.status, siteType: user.siteType, token,
     });
   } catch (error) {
     console.error('Admin verify OTP error:', error);
@@ -618,6 +623,7 @@ const adminPasswordLogin = async (req, res) => {
 
     const last10 = cleanPhone.slice(-10);
     const user = await User.findOne({
+      siteType: resolveSiteType(req),
       $or: [{ phone: last10 }, { phone: { $regex: last10 + '$' } }],
     }).select('+password');
 
@@ -642,7 +648,7 @@ const adminPasswordLogin = async (req, res) => {
     res.json({
       _id: user._id, name: user.name, email: user.email, phone: user.phone,
       role: user.role, isAdmin: user.isAdmin, isSubAdmin: user.isSubAdmin, isSuperAdmin: user.isSuperAdmin,
-      status: user.status, token,
+      status: user.status, siteType: user.siteType, token,
     });
   } catch (error) {
     console.error('Admin password login error:', error);
@@ -654,7 +660,7 @@ const adminPasswordLogin = async (req, res) => {
 // @route   POST /api/auth/admin/forgot-password/send-otp
 const adminForgotPasswordSendOTP = async (req, res) => {
   try {
-    const result = await findAdminByPhone(req.body.phone);
+    const result = await findAdminByPhone(req.body.phone, resolveSiteType(req));
     if (result.error) return res.status(result.status).json({ message: result.error });
     const { user, last10 } = result;
 
@@ -680,7 +686,7 @@ const adminForgotPasswordSendOTP = async (req, res) => {
 // @route   POST /api/auth/admin/forgot-password/verify-otp
 const adminForgotPasswordVerifyOTP = async (req, res) => {
   try {
-    const result = await findAdminByPhone(req.body.phone);
+    const result = await findAdminByPhone(req.body.phone, resolveSiteType(req));
     if (result.error) return res.status(result.status).json({ message: result.error });
     const { user } = result;
 
