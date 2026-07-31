@@ -28,6 +28,13 @@ const betSchema = new mongoose.Schema({
     type: String,
     enum: ['active', 'won', 'lost'],
     default: 'active'
+  },
+  // Which website the bet came from (mirrors the user's siteType)
+  siteType: {
+    type: String,
+    enum: ['rushkroludo', '101dream'],
+    default: 'rushkroludo',
+    index: true,
   }
 }, {
   timestamps: true

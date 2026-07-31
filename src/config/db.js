@@ -32,12 +32,15 @@ const connectDB = async () => {
       if (tagged.modifiedCount > 0) {
         console.log(`Tagged ${tagged.modifiedCount} existing users with siteType=rushkroludo`);
       }
-      const taggedWr = await conn.connection.db.collection('walletrequests').updateMany(
-        { siteType: { $exists: false } },
-        { $set: { siteType: 'rushkroludo' } }
-      );
-      if (taggedWr.modifiedCount > 0) {
-        console.log(`Tagged ${taggedWr.modifiedCount} existing wallet requests with siteType=rushkroludo`);
+      // Same for every collection that is now queried per site
+      for (const name of ['walletrequests', 'bets', 'spinnerrecords', 'ludomatches']) {
+        const r = await conn.connection.db.collection(name).updateMany(
+          { siteType: { $exists: false } },
+          { $set: { siteType: 'rushkroludo' } }
+        );
+        if (r.modifiedCount > 0) {
+          console.log(`Tagged ${r.modifiedCount} ${name} with siteType=rushkroludo`);
+        }
       }
     } catch (indexErr) {
       // Ignore if index doesn't exist

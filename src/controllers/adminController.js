@@ -6,7 +6,6 @@ const Bet = require('../models/Bet');
 const Notification = require('../models/Notification');
 const GlobalStats = require('../models/GlobalStats');
 const SpinnerRecord = require('../models/SpinnerRecord');
-const AdminSettings = require('../models/AdminSettings');
 const BonusRecord = require('../models/BonusRecord');
 const LudoMatch = require('../models/LudoMatch');
 const LudoResultRequest = require('../models/LudoResultRequest');
@@ -58,8 +57,8 @@ const getDashboardStats = async (req, res) => {
       WalletRequest.countDocuments({ type: 'withdrawal', status: 'pending', ...sF }),
     ]);
 
-    // Bet stats use date filter
-    const betFilter = hasPeriodFilter ? dateFilter : {};
+    // Bet stats use date filter + the site filter, so each panel only counts its own users
+    const betFilter = hasPeriodFilter ? { ...dateFilter, ...sF } : { ...sF };
 
     // Aviator bets: sum actual payouts for WON bets (amount + profit = winAmount)
     const [totalBets, totalWins, betAgg] = await Promise.all([
@@ -104,8 +103,8 @@ const getDashboardStats = async (req, res) => {
       }},
     ]);
 
-    // Get commission tiers once (not per match)
-    const settings = await AdminSettings.findOne({ key: 'main' }).select('ludoCommTier1Max ludoCommTier1Pct ludoCommTier2Max ludoCommTier2Pct ludoCommTier3Pct').lean();
+    // Get commission tiers once (not per match), from this site's settings doc
+    const settings = await getOrCreateSettings(req.query.siteType);
     const tier1Max = settings?.ludoCommTier1Max ?? 250;
     const tier1Pct = settings?.ludoCommTier1Pct ?? 10;
     const tier2Max = settings?.ludoCommTier2Max ?? 600;
@@ -135,8 +134,9 @@ const getDashboardStats = async (req, res) => {
     let totalBetAmount = aviatorBet + spinBet + ludoBet;
     let totalWinAmount = aviatorWin + spinWin + ludoWin;
 
-    // If no period filter, also include global stats as fallback for aviator
-    if (!hasPeriodFilter) {
+    // If no period filter, also include global stats as fallback for aviator.
+    // GlobalStats is a site-agnostic lifetime counter, so skip it when scoped to one site.
+    if (!hasPeriodFilter && !sF.siteType) {
       const globalStats = await GlobalStats.findOne({ key: 'main' });
       if (globalStats) {
         // GlobalStats tracks aviator only — replace aviator portion if global is larger

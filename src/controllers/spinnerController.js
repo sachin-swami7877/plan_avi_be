@@ -101,6 +101,7 @@ const playReferralSpinnerLogic = async (req, res, user) => {
       spinCost,
       spinType: 'referral',
       balanceAfter: updated.walletBalance,
+      siteType: user.siteType || 'rushkroludo',
     });
 
     if (winAmount > 0) {
@@ -221,6 +222,7 @@ const playSpinner = async (req, res) => {
       winAmount,
       spinCost,
       balanceAfter: updated.walletBalance,
+      siteType: user.siteType || 'rushkroludo',
     });
 
     // Record spin cost debit

@@ -101,6 +101,13 @@ const ludoMatchSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  // Which website the match belongs to (mirrors the creator's siteType)
+  siteType: {
+    type: String,
+    enum: ['rushkroludo', '101dream'],
+    default: 'rushkroludo',
+    index: true,
+  },
 }, {
   timestamps: true,
 });

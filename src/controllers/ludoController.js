@@ -136,6 +136,7 @@ const createMatch = async (req, res) => {
       status: 'waiting',
       players: [{ userId: req.user._id, userName: user.name, amountPaid: 0, paidFromDeposit: 0, paidFromEarnings: 0, joinedAt: new Date() }],
       joinExpiryAt,
+      siteType: req.user.siteType || 'rushkroludo',
     });
 
     const io = req.app.get('io');

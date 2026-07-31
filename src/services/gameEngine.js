@@ -676,6 +676,7 @@ class GameEngine {
       gameRoundId: this.currentRound._id,
       amount,
       status: 'active',
+      siteType: user.siteType || 'rushkroludo',
     });
 
     await recordWalletTx(

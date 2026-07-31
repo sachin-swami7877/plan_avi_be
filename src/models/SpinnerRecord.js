@@ -30,6 +30,13 @@ const spinnerRecordSchema = new mongoose.Schema({
     type: Number,
     required: true,
   },
+  // Which website the spin came from (mirrors the user's siteType)
+  siteType: {
+    type: String,
+    enum: ['rushkroludo', '101dream'],
+    default: 'rushkroludo',
+    index: true,
+  },
 }, {
   timestamps: true,
 });
