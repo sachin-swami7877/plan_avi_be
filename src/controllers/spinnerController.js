@@ -4,6 +4,10 @@ const { recordWalletTx } = require('../utils/recordWalletTx');
 
 const VALID_SPIN_COSTS = [50, 100];
 
+// NOTE: every outcome below must have a matching segment on the frontend wheel
+// (frontend_101dream/src/pages/Spinner.jsx). If a value is added here without a
+// segment there, the wheel stops on the wrong prize.
+
 // Paid ₹50 spin outcomes
 const OUTCOMES_50 = [
   { value: 'thank_you', weight: 53 },
