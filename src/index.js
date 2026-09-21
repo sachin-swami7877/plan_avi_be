@@ -5,7 +5,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 
-const connectDB = require('./config/db');
+const { connectDB } = require('./config/db');
+const { siteContextMiddleware } = require('./middleware/siteContext');
 const authRoutes = require('./routes/auth');
 const walletRoutes = require('./routes/wallet');
 const adminRoutes = require('./routes/admin');
@@ -31,10 +32,14 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175',
   'http://localhost:5176', 'http://localhost:5177', 'http://localhost:3000',
-  // 101dream frontend (shares this backend, users separated by siteType)
+  // 101dream + VK Adda frontends share this backend (users separated by siteType / database)
   'https://101dream.vercel.app',
   'https://101dream.com',
   'https://www.101dream.com',
+  // VK Adda frontend (siteType vk)
+  'https://learning-node-vk.vercel.app',
+  'https://vkadda.com',
+  'https://www.vkadda.com',
   ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : []),
 ];
 
@@ -57,6 +62,9 @@ initFirebase();
 // Middleware
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
+// Resolve which site (rushkroludo / 101dream / vk) the request belongs to and
+// route every DB call in it to that site's database — must come before the routes
+app.use(siteContextMiddleware);
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Make io accessible to routes

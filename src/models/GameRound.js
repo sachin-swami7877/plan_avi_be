@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const gameRoundSchema = new mongoose.Schema({
   roundId: {
@@ -35,4 +36,4 @@ const gameRoundSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('GameRound', gameRoundSchema);
+module.exports = routedModel('GameRound', gameRoundSchema);

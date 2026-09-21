@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const { SITE_TYPES } = require('../config/sites');
+const { routedModel } = require('../config/db');
 
 const ludoMatchSchema = new mongoose.Schema({
   roomCode: {
@@ -104,7 +106,7 @@ const ludoMatchSchema = new mongoose.Schema({
   // Which website the match belongs to (mirrors the creator's siteType)
   siteType: {
     type: String,
-    enum: ['rushkroludo', '101dream'],
+    enum: SITE_TYPES,
     default: 'rushkroludo',
     index: true,
   },
@@ -116,4 +118,4 @@ ludoMatchSchema.index({ status: 1, createdAt: -1 });
 ludoMatchSchema.index({ creatorId: 1, status: 1 });
 ludoMatchSchema.index({ 'players.userId': 1, status: 1 });
 
-module.exports = mongoose.model('LudoMatch', ludoMatchSchema);
+module.exports = routedModel('LudoMatch', ludoMatchSchema);

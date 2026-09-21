@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const globalStatsSchema = new mongoose.Schema({
   key: {
@@ -27,4 +28,4 @@ const globalStatsSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('GlobalStats', globalStatsSchema);
+module.exports = routedModel('GlobalStats', globalStatsSchema);

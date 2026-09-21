@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const bonusRecordSchema = new mongoose.Schema({
   userId: {
@@ -24,4 +25,4 @@ const bonusRecordSchema = new mongoose.Schema({
 
 bonusRecordSchema.index({ userId: 1, createdAt: -1 });
 
-module.exports = mongoose.model('BonusRecord', bonusRecordSchema);
+module.exports = routedModel('BonusRecord', bonusRecordSchema);

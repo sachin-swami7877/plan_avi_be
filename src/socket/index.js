@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { runWithSite, isMainDb } = require('../config/db');
+const { normalizeSite, DEFAULT_SITE } = require('../config/sites');
 const HIDDEN_PHONES = ['9166821247', '7877722306'];
 
 const initSocket = (io) => {
@@ -30,11 +32,16 @@ const initSocket = (io) => {
       if (!token) {
         // Allow connection without auth for game state viewing
         socket.user = null;
+        socket.siteType = DEFAULT_SITE;
         return next();
       }
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id).select('-otp -otpExpiry +activeToken');
+      // The token says which site — and therefore which database — this user belongs to
+      socket.siteType = normalizeSite(decoded.siteType);
+      const user = await runWithSite(socket.siteType, () =>
+        User.findById(decoded.id).select('-otp -otpExpiry +activeToken')
+      );
 
       if (!user) {
         return next(new Error('User not found'));
@@ -55,12 +62,16 @@ const initSocket = (io) => {
     } catch (error) {
       // Allow connection but without auth
       socket.user = null;
+      socket.siteType = DEFAULT_SITE;
       next();
     }
   });
 
   io.on('connection', (socket) => {
     console.log(`🔌 Socket connected: ${socket.id}`);
+
+    // Every event handler on this socket runs against the socket's site database
+    socket.use((_packet, next) => runWithSite(socket.siteType, () => next()));
 
     // Join user-specific room if authenticated
     if (socket.user) {
@@ -123,6 +134,11 @@ const initSocket = (io) => {
       if (!socket.user) {
         const cb = typeof callback === 'function' ? callback : () => {};
         return cb({ error: 'Not authenticated' });
+      }
+      // The Aviator engine runs a single round loop on the main database only
+      if (!isMainDb(socket.siteType)) {
+        const cb = typeof callback === 'function' ? callback : () => {};
+        return cb({ error: 'Aviator is not available on this site' });
       }
       try {
         const gameEngine = io._gameEngine;

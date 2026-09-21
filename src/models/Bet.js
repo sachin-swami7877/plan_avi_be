@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const { SITE_TYPES } = require('../config/sites');
+const { routedModel } = require('../config/db');
 
 const betSchema = new mongoose.Schema({
   userId: {
@@ -32,7 +34,7 @@ const betSchema = new mongoose.Schema({
   // Which website the bet came from (mirrors the user's siteType)
   siteType: {
     type: String,
-    enum: ['rushkroludo', '101dream'],
+    enum: SITE_TYPES,
     default: 'rushkroludo',
     index: true,
   }
@@ -40,4 +42,4 @@ const betSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('Bet', betSchema);
+module.exports = routedModel('Bet', betSchema);

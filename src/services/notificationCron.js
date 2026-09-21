@@ -1,4 +1,5 @@
 const Notification = require('../models/Notification');
+const { runWithSite, distinctDbSites } = require('../config/db');
 
 const CRON_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
 const DELETE_AFTER_DAYS = 10;
@@ -18,9 +19,16 @@ async function cleanupReadNotifications() {
   }
 }
 
+// Runs once per database — sites with their own database (vk) have their own notifications
+async function cleanupAllDatabases() {
+  for (const site of distinctDbSites()) {
+    await runWithSite(site, cleanupReadNotifications);
+  }
+}
+
 function startNotificationCron() {
-  cleanupReadNotifications();
-  setInterval(cleanupReadNotifications, CRON_INTERVAL_MS);
+  cleanupAllDatabases();
+  setInterval(cleanupAllDatabases, CRON_INTERVAL_MS);
   console.log(`[Notification Cron] Started (cleanup read notifications > ${DELETE_AFTER_DAYS} days, every 6h)`);
 }
 

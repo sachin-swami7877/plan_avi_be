@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const { SITE_TYPES } = require('../config/sites');
+const { routedModel } = require('../config/db');
 
 const spinnerRecordSchema = new mongoose.Schema({
   userId: {
@@ -33,7 +35,7 @@ const spinnerRecordSchema = new mongoose.Schema({
   // Which website the spin came from (mirrors the user's siteType)
   siteType: {
     type: String,
-    enum: ['rushkroludo', '101dream'],
+    enum: SITE_TYPES,
     default: 'rushkroludo',
     index: true,
   },
@@ -44,4 +46,4 @@ const spinnerRecordSchema = new mongoose.Schema({
 spinnerRecordSchema.index({ userId: 1, createdAt: -1 });
 spinnerRecordSchema.index({ createdAt: 1 });
 
-module.exports = mongoose.model('SpinnerRecord', spinnerRecordSchema);
+module.exports = routedModel('SpinnerRecord', spinnerRecordSchema);

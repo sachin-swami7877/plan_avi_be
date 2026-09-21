@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 // One request per match. Multiple claims (win/loss/dispute) from both players.
 const claimSchema = new mongoose.Schema({
@@ -66,4 +67,4 @@ const ludoResultRequestSchema = new mongoose.Schema({
 
 ludoResultRequestSchema.index({ status: 1 });
 
-module.exports = mongoose.model('LudoResultRequest', ludoResultRequestSchema);
+module.exports = routedModel('LudoResultRequest', ludoResultRequestSchema);

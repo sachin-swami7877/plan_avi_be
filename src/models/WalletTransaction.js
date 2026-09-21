@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const walletTransactionSchema = new mongoose.Schema(
   {
@@ -68,4 +69,4 @@ const walletTransactionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('WalletTransaction', walletTransactionSchema);
+module.exports = routedModel('WalletTransaction', walletTransactionSchema);

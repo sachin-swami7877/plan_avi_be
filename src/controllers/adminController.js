@@ -1,3 +1,4 @@
+const { SITE_TYPES } = require('../config/sites');
 const sharp = require('sharp');
 const User = require('../models/User');
 const WalletRequest = require('../models/WalletRequest');
@@ -29,7 +30,7 @@ const getDashboardStats = async (req, res) => {
   try {
     const { period, from: fromStr, to: toStr } = req.query;
     // Optional site scoping — each site's admin panel passes its own siteType
-    const sF = ['rushkroludo', '101dream'].includes(req.query.siteType) ? { siteType: req.query.siteType } : {};
+    const sF = SITE_TYPES.includes(req.query.siteType) ? { siteType: req.query.siteType } : {};
 
     // Build date filter for period-based stats
     let dateFilter = {};
@@ -203,7 +204,7 @@ const getUsers = async (req, res) => {
     }
     // Site filter — list rushkroludo and 101dream users separately
     const { siteType } = req.query;
-    if (siteType && ['rushkroludo', '101dream'].includes(siteType)) {
+    if (siteType && SITE_TYPES.includes(siteType)) {
       filter.siteType = siteType;
     }
     if (search && search.trim()) {
@@ -527,7 +528,7 @@ const getWalletRequests = async (req, res) => {
     const filter = {};
     if (status) filter.status = status;
     if (type) filter.type = type;
-    if (siteType && ['rushkroludo', '101dream'].includes(siteType)) filter.siteType = siteType;
+    if (siteType && SITE_TYPES.includes(siteType)) filter.siteType = siteType;
 
     // Date filtering — all dates interpreted as IST
     if (fromStr && toStr) {
@@ -873,7 +874,7 @@ const getAdminNotifications = async (req, res) => {
 
     // Site scoping — each panel only lists requests raised on its own website.
     // Wallet requests and ludo matches carry siteType; KYC is scoped via its user.
-    const siteType = ['rushkroludo', '101dream'].includes(req.query.siteType) ? req.query.siteType : null;
+    const siteType = SITE_TYPES.includes(req.query.siteType) ? req.query.siteType : null;
     const sF = siteType ? { siteType } : {};
     let kycFilter = { status: 'pending' };
     let ludoFilter = { status: 'pending' };
@@ -1548,7 +1549,7 @@ const getPendingCounts = async (req, res) => {
 
     // Optional site scoping (each site's admin panel passes its own siteType).
     // Wallet requests carry siteType; KYC is scoped via its user, ludo via its match.
-    const siteType = ['rushkroludo', '101dream'].includes(req.query.siteType) ? req.query.siteType : null;
+    const siteType = SITE_TYPES.includes(req.query.siteType) ? req.query.siteType : null;
     const sF = siteType ? { siteType } : {};
     let kF = {};   // KYC scope
     let lF = {};   // Ludo result scope
@@ -1649,7 +1650,7 @@ const getDepositUsersReport = async (req, res) => {
     const { siteType, from: fromStr, to: toStr, minAmount, maxAmount } = req.query;
 
     const match = { type: 'deposit', status: 'approved' };
-    if (siteType && ['rushkroludo', '101dream'].includes(siteType)) match.siteType = siteType;
+    if (siteType && SITE_TYPES.includes(siteType)) match.siteType = siteType;
 
     if (fromStr && toStr) {
       match.createdAt = { $gte: istStartOfDay(fromStr), $lte: istEndOfDay(toStr) };
@@ -2090,7 +2091,7 @@ const getAdminCreditLog = async (req, res) => {
 
     // Site scoping — each site's admin panel passes its own siteType
     const { siteType } = req.query;
-    if (['rushkroludo', '101dream'].includes(siteType)) {
+    if (SITE_TYPES.includes(siteType)) {
       const siteUserIds = await User.find({ siteType }).select('_id').lean();
       filter.userId = { $in: siteUserIds.map(u => u._id) };
     }

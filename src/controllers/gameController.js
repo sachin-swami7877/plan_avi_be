@@ -1,5 +1,10 @@
 const Bet = require('../models/Bet');
 const GameRound = require('../models/GameRound');
+const { isMainDb } = require('../config/db');
+
+// The Aviator engine runs a single round loop against the main database only —
+// sites on their own database (vk) can't place or settle bets there
+const AVIATOR_UNAVAILABLE = 'Aviator is not available on this site';
 
 // @desc    Get current game state
 // @route   GET /api/game/state
@@ -18,6 +23,7 @@ const getGameState = async (req, res) => {
 // @route   POST /api/game/bet
 const placeBet = async (req, res) => {
   try {
+    if (!isMainDb(req.siteType)) return res.status(400).json({ message: AVIATOR_UNAVAILABLE });
     const { amount } = req.body;
     
     if (!amount || amount < 10) {
@@ -49,6 +55,7 @@ const placeBet = async (req, res) => {
 // @route   POST /api/game/cashout
 const cashOut = async (req, res) => {
   try {
+    if (!isMainDb(req.siteType)) return res.status(400).json({ message: AVIATOR_UNAVAILABLE });
     const gameEngine = req.app.get('gameEngine');
     const result = await gameEngine.cashOut(req.user._id);
 

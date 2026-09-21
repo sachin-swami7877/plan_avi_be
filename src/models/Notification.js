@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const notificationSchema = new mongoose.Schema({
   userId: {
@@ -39,4 +40,4 @@ const notificationSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('Notification', notificationSchema);
+module.exports = routedModel('Notification', notificationSchema);

@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const { SITE_TYPES } = require('../config/sites');
+const { routedModel } = require('../config/db');
 
 const walletRequestSchema = new mongoose.Schema({
   userId: {
@@ -41,7 +43,7 @@ const walletRequestSchema = new mongoose.Schema({
   // Which website the request came from (mirrors the user's siteType)
   siteType: {
     type: String,
-    enum: ['rushkroludo', '101dream'],
+    enum: SITE_TYPES,
     default: 'rushkroludo',
     index: true,
   }
@@ -52,4 +54,4 @@ const walletRequestSchema = new mongoose.Schema({
 // Only index non-null UTR numbers — enforces uniqueness across all deposit requests
 walletRequestSchema.index({ utrNumber: 1 }, { unique: true, partialFilterExpression: { utrNumber: { $type: 'string' } } });
 
-module.exports = mongoose.model('WalletRequest', walletRequestSchema);
+module.exports = routedModel('WalletRequest', walletRequestSchema);

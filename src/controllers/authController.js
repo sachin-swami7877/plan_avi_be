@@ -5,6 +5,8 @@ const User = require('../models/User');
 const { sendOtpSms } = require('../services/smsIndiaHub');
 const { sendPushToAdmins } = require('../config/firebase');
 const { awardReferralSpins } = require('../utils/awardReferralSpins');
+const { runWithSite } = require('../config/db');
+const { normalizeSite } = require('../config/sites');
 
 // Temporary in-memory store for OTPs of unverified (not yet created) phone users
 // Key: 10-digit phone, Value: { otp, otpExpiry }
@@ -40,8 +42,10 @@ const createTransporter = () => {
 
 const generateOTP = () => Math.floor(1000 + Math.random() * 9000).toString();
 
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '90d' });
+// siteType is embedded so every later request (and socket) is routed to the
+// database this user lives in — see middleware/siteContext.js
+const generateToken = (id, siteType) => {
+  return jwt.sign({ id, siteType: normalizeSite(siteType) }, process.env.JWT_SECRET, { expiresIn: '90d' });
 };
 
 // Single-device enforcement: save new token + force-logout any existing session
@@ -68,12 +72,10 @@ const enforceOneDevice = async (userId, newToken, io) => {
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-// Which website the request came from — 101dream users live in their own account space.
-// Frontends send { type: '101dream' } at login; anything else falls back to rushkroludo.
-const resolveSiteType = (req) => {
-  const t = req.body.type || req.body.siteType;
-  return t === '101dream' ? '101dream' : 'rushkroludo';
-};
+// Which website the request came from. Frontends send { type: '101dream' | 'vk' }
+// at login; anything else falls back to rushkroludo. The site context middleware
+// already resolved this (and switched to that site's database) — reuse it.
+const resolveSiteType = (req) => req.siteType || normalizeSite(req.body.type || req.body.siteType);
 
 // @desc    Send OTP for login (supports email or mobile number)
 // @route   POST /api/auth/send-otp
@@ -273,7 +275,7 @@ const verifyOTP = async (req, res) => {
           );
         }
 
-        const token = generateToken(user._id);
+        const token = generateToken(user._id, user.siteType);
         // Single-device: invalidate old sessions
         const io = req.app.get('io');
         await enforceOneDevice(user._id, token, io);
@@ -314,7 +316,7 @@ const verifyOTP = async (req, res) => {
     // Use updateOne to bypass full document validation (some users may lack email field)
     await User.updateOne({ _id: user._id }, { otp: null, otpExpiry: null });
 
-    const token = generateToken(user._id);
+    const token = generateToken(user._id, user.siteType);
 
     // Single-device: invalidate old sessions
     const io = req.app.get('io');
@@ -591,7 +593,7 @@ const adminVerifyOTP = async (req, res) => {
     if (new Date() > user.otpExpiry) return res.status(400).json({ message: 'OTP expired' });
 
     await User.updateOne({ _id: user._id }, { otp: null, otpExpiry: null });
-    const token = generateToken(user._id);
+    const token = generateToken(user._id, user.siteType);
 
     // Single-device: invalidate old sessions
     const io = req.app.get('io');
@@ -639,7 +641,7 @@ const adminPasswordLogin = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ message: 'Invalid password' });
 
-    const token = generateToken(user._id);
+    const token = generateToken(user._id, user.siteType);
 
     // Single-device: invalidate old sessions
     const io = req.app.get('io');
@@ -696,7 +698,7 @@ const adminForgotPasswordVerifyOTP = async (req, res) => {
     if (new Date() > user.otpExpiry) return res.status(400).json({ message: 'OTP expired' });
 
     await User.updateOne({ _id: user._id }, { otp: null, otpExpiry: null });
-    const resetToken = jwt.sign({ id: user._id, purpose: 'password-reset' }, process.env.JWT_SECRET, { expiresIn: '5m' });
+    const resetToken = jwt.sign({ id: user._id, purpose: 'password-reset', siteType: user.siteType }, process.env.JWT_SECRET, { expiresIn: '5m' });
 
     res.json({ message: 'OTP verified. You can now reset your password.', resetToken });
   } catch (error) {
@@ -724,13 +726,15 @@ const adminResetPassword = async (req, res) => {
 
     if (decoded.purpose !== 'password-reset') return res.status(401).json({ message: 'Invalid reset token.' });
 
-    const user = await User.findById(decoded.id);
+    // The reset token carries the site it was issued for — look the admin up in that site's database
+    const site = decoded.siteType || req.siteType;
+    const user = await runWithSite(site, () => User.findById(decoded.id));
     if (!user) return res.status(404).json({ message: 'User not found' });
     if (user.role !== 'superadmin' && user.role !== 'admin' && user.role !== 'manager') return res.status(403).json({ message: 'Access denied.' });
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
-    await User.updateOne({ _id: user._id }, { password: hashedPassword });
+    await runWithSite(site, () => User.updateOne({ _id: user._id }, { password: hashedPassword }));
 
     res.json({ message: 'Password reset successfully. You can now login with your new password.' });
   } catch (error) {

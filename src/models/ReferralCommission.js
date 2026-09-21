@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const referralCommissionSchema = new mongoose.Schema(
   {
@@ -32,4 +33,4 @@ const referralCommissionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('ReferralCommission', referralCommissionSchema);
+module.exports = routedModel('ReferralCommission', referralCommissionSchema);

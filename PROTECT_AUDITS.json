@@ -1,0 +1,65 @@
+{
+  "concepts": {
+    "access-control": {
+      "last_audit": "2026-09-21T11:24:54+00:00",
+      "mode": "skill-audit",
+      "needs_audit": false,
+      "present": true,
+      "severity": "block",
+      "status": "pass"
+    },
+    "audit-trail": {
+      "last_audit": "2026-09-21T11:24:54+00:00",
+      "mode": "skill-audit",
+      "needs_audit": false,
+      "present": true,
+      "severity": "block",
+      "status": "pass"
+    },
+    "email-phi-safety": {
+      "last_audit": "2026-09-21T11:24:54+00:00",
+      "mode": "skill-audit",
+      "needs_audit": false,
+      "present": true,
+      "severity": "block",
+      "status": "pass"
+    },
+    "login-throttle": {
+      "last_audit": "2026-09-21T11:24:54+00:00",
+      "mode": "skill-audit",
+      "needs_audit": false,
+      "present": true,
+      "severity": "block",
+      "status": "pass"
+    },
+    "password-hashing": {
+      "last_audit": "2026-09-21T11:24:54+00:00",
+      "mode": "skill-audit",
+      "needs_audit": false,
+      "present": true,
+      "severity": "block",
+      "status": "pass"
+    },
+    "penetration-review": {
+      "last_audit": "2026-09-21T11:24:54+00:00",
+      "mode": "skill-audit",
+      "needs_audit": false,
+      "present": true,
+      "severity": "warn",
+      "status": "pass"
+    },
+    "phi-safe-logging": {
+      "last_audit": "2026-09-21T11:24:54+00:00",
+      "mode": "skill-audit",
+      "needs_audit": false,
+      "present": true,
+      "severity": "block",
+      "status": "pass"
+    }
+  },
+  "full_audit_max_age_days": 30,
+  "full_audit_stale": true,
+  "last_full_audit_all": null,
+  "repo": "backend",
+  "updated": "2026-09-21T11:25:01+00:00"
+}

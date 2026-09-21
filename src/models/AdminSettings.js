@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const adminSettingsSchema = new mongoose.Schema({
   key: {
@@ -58,4 +59,4 @@ const adminSettingsSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-module.exports = mongoose.model('AdminSettings', adminSettingsSchema);
+module.exports = routedModel('AdminSettings', adminSettingsSchema);

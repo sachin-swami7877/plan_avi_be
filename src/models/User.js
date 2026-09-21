@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const { SITE_TYPES } = require('../config/sites');
+const { routedModel } = require('../config/db');
 
 const userSchema = new mongoose.Schema({
   name: {
@@ -146,7 +148,7 @@ const userSchema = new mongoose.Schema({
   // Which website this account belongs to — same email/phone can exist once per site
   siteType: {
     type: String,
-    enum: ['rushkroludo', '101dream'],
+    enum: SITE_TYPES,
     default: 'rushkroludo',
     index: true,
   },
@@ -235,4 +237,4 @@ userSchema.methods.smartRefund = function (amount, paidFromDeposit, paidFromEarn
 userSchema.index({ email: 1, siteType: 1 }, { unique: true, partialFilterExpression: { email: { $type: 'string' } } });
 userSchema.index({ phone: 1, siteType: 1 }, { unique: true, partialFilterExpression: { phone: { $type: 'string' } } });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = routedModel('User', userSchema);

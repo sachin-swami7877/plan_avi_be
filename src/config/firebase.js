@@ -1,3 +1,4 @@
+const { SITE_TYPES } = require('./sites');
 const admin = require('firebase-admin');
 
 let messaging = null;
@@ -141,7 +142,7 @@ async function sendPushToAdmins(title, body, data = {}, siteType) {
     $or: [{ isAdmin: true }, { isSubAdmin: true }],
     fcmTokens: { $exists: true, $ne: [] },
   };
-  if (['rushkroludo', '101dream'].includes(siteType)) filter.siteType = siteType;
+  if (SITE_TYPES.includes(siteType)) filter.siteType = siteType;
   const admins = await User.find(filter).select('_id fcmTokens');
 
   for (const admin of admins) {

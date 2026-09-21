@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { routedModel } = require('../config/db');
 
 const kycRequestSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
@@ -13,4 +14,4 @@ const kycRequestSchema = new mongoose.Schema({
   reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true });
 
-module.exports = mongoose.model('KycRequest', kycRequestSchema);
+module.exports = routedModel('KycRequest', kycRequestSchema);

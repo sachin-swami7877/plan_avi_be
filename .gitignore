@@ -13,3 +13,6 @@ build
 .idea
 uploads/
 tmp/
+
+# Propela Protect local cache
+.protect_cache/

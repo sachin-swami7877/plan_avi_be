@@ -2,6 +2,7 @@ const LudoMatch = require('../models/LudoMatch');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { recordWalletTx } = require('../utils/recordWalletTx');
+const { runWithSite, distinctDbSites } = require('../config/db');
 
 const RUN_INTERVAL_MS = 15 * 1000; // every 15 seconds — fast expiry detection
 
@@ -104,16 +105,19 @@ async function expireRoomCodeMatches(io) {
 }
 
 function startLudoCron(io) {
+  // Runs once per database — sites with their own database (vk) have their own matches
   const runAll = async () => {
-    try {
-      await expireWaitingMatches(io);
-    } catch (err) {
-      console.error('[Ludo Cron] expireWaitingMatches error:', err);
-    }
-    try {
-      await expireRoomCodeMatches(io);
-    } catch (err) {
-      console.error('[Ludo Cron] expireRoomCodeMatches error:', err);
+    for (const site of distinctDbSites()) {
+      try {
+        await runWithSite(site, () => expireWaitingMatches(io));
+      } catch (err) {
+        console.error(`[Ludo Cron] expireWaitingMatches error (${site}):`, err);
+      }
+      try {
+        await runWithSite(site, () => expireRoomCodeMatches(io));
+      } catch (err) {
+        console.error(`[Ludo Cron] expireRoomCodeMatches error (${site}):`, err);
+      }
     }
   };
 
