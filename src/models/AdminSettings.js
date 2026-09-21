@@ -17,6 +17,10 @@ const adminSettingsSchema = new mongoose.Schema({
   // Support
   supportPhone: { type: String, default: null },
   supportWhatsApp: { type: String, default: null },
+  supportTelegram: { type: String, default: null },   // phone number or @handle
+  // Which support channels the user app shows — WhatsApp is preferred when both are on
+  supportWhatsAppEnabled: { type: Boolean, default: true },
+  supportTelegramEnabled: { type: Boolean, default: true },
   // Bonus / Cashback
   bonusMinBet: { type: Number, default: 1000 },
   bonusCashback: { type: Number, default: 100 },

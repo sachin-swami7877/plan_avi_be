@@ -1192,6 +1192,9 @@ const getSettings = async (req, res) => {
       upiNumber: settings.upiNumber,
       supportPhone: settings.supportPhone,
       supportWhatsApp: settings.supportWhatsApp,
+      supportTelegram: settings.supportTelegram,
+      supportWhatsAppEnabled: settings.supportWhatsAppEnabled ?? true,
+      supportTelegramEnabled: settings.supportTelegramEnabled ?? true,
       bonusMinBet: settings.bonusMinBet,
       bonusCashback: settings.bonusCashback,
       termsDeposit: settings.termsDeposit,
@@ -1225,7 +1228,8 @@ const updateSettings = async (req, res) => {
     const {
       betsEnabled,
       upiId, upiNumber,
-      supportPhone, supportWhatsApp,
+      supportPhone, supportWhatsApp, supportTelegram,
+      supportWhatsAppEnabled, supportTelegramEnabled,
       bonusMinBet,       bonusCashback,
       termsDeposit, termsWithdrawal, termsGeneral,
       dummyUserCount,
@@ -1256,6 +1260,9 @@ const updateSettings = async (req, res) => {
     if (upiNumber !== undefined) settings.upiNumber = upiNumber;
     if (supportPhone !== undefined) settings.supportPhone = supportPhone;
     if (supportWhatsApp !== undefined) settings.supportWhatsApp = supportWhatsApp;
+    if (supportTelegram !== undefined) settings.supportTelegram = supportTelegram;
+    if (typeof supportWhatsAppEnabled === 'boolean') settings.supportWhatsAppEnabled = supportWhatsAppEnabled;
+    if (typeof supportTelegramEnabled === 'boolean') settings.supportTelegramEnabled = supportTelegramEnabled;
     if (bonusMinBet !== undefined) settings.bonusMinBet = Number(bonusMinBet);
     if (bonusCashback !== undefined) settings.bonusCashback = Number(bonusCashback);
     if (termsDeposit !== undefined) settings.termsDeposit = termsDeposit;
@@ -1386,10 +1393,13 @@ const getBonusRecords = async (req, res) => {
 const getPublicSupport = async (req, res) => {
   try {
     const s = await getOrCreateSettings(siteFromReq(req));
-    res.json({ 
-      supportPhone: s.supportPhone, 
+    res.json({
+      supportPhone: s.supportPhone,
       supportWhatsApp: s.supportWhatsApp,
-      dummyUserCount: s.dummyUserCount || 10 
+      supportTelegram: s.supportTelegram,
+      supportWhatsAppEnabled: s.supportWhatsAppEnabled ?? true,
+      supportTelegramEnabled: s.supportTelegramEnabled ?? true,
+      dummyUserCount: s.dummyUserCount || 10,
     });
   } catch (error) {
     console.error(error);
