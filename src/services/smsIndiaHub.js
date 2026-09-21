@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { currentSite } = require('../config/db');
 
 /**
  * Send OTP SMS via SMSINDIAHUB
@@ -8,10 +9,12 @@ const axios = require('axios');
  * - SMSINDIAHUB_SENDER_ID (optional, default: SMSHUB)
  * - SMSINDIAHUB_DLT_TEMPLATE_ID (optional, default from provided API)
  * - SMSINDIAHUB_PE_ID (optional, default from provided API)
- * - SMSINDIAHUB_ENTITY_NAME (optional, entity name in DLT template)
+ * - SMSINDIAHUB_ENTITY_NAME (optional, name shown in the SMS for rushkroludo/101dream)
+ * - SMSINDIAHUB_ENTITY_NAME_VK (optional, name shown in the SMS for the vk site)
  * - SMSINDIAHUB_URL (optional, override endpoint)
  */
-async function sendOtpSms(phone, otp) {
+// siteType defaults to the site of the current request (see config/db.js runWithSite)
+async function sendOtpSms(phone, otp, siteType = currentSite()) {
   const apiKey = process.env.SMSINDIAHUB_API_KEY;
   if (!apiKey) {
     throw new Error('SMSINDIAHUB_API_KEY is not configured');
@@ -21,7 +24,12 @@ async function sendOtpSms(phone, otp) {
   const url = process.env.SMSINDIAHUB_URL || 'https://cloud.smsindiahub.in/api/mt/SendSMS';
   const dltTemplateId = process.env.SMSINDIAHUB_DLT_TEMPLATE_ID || '1007801291964877107';
   const peId = process.env.SMSINDIAHUB_PE_ID || '1701158019630577568';
-  const entityName = process.env.SMSINDIAHUB_ENTITY_NAME || 'RushkroLudo';
+  // The DLT-registered template is fixed text with two {#var#} slots:
+  //   "Welcome to the {#var#} powered by SMSINDIAHUB. Your OTP for registration is {#var#}"
+  // Operators reject any SMS whose wording differs, so only the name slot is per site.
+  const entityName = siteType === 'vk'
+    ? (process.env.SMSINDIAHUB_ENTITY_NAME_VK || 'VK Adda')
+    : (process.env.SMSINDIAHUB_ENTITY_NAME || 'RushkroLudo');
 
   const cleanPhone = String(phone || '').replace(/[^0-9]/g, '');
   if (!cleanPhone || cleanPhone.length < 10) {
