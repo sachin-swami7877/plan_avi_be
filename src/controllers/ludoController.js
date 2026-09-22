@@ -301,6 +301,11 @@ const joinMatch = async (req, res) => {
     if (preCheck.joinExpiryAt && new Date() > preCheck.joinExpiryAt) {
       return res.status(400).json({ message: 'This match has expired' });
     }
+    // Entry fees and the prize move between these two players, so both must be
+    // on the same website — otherwise money crosses from one site's book to another's
+    if (preCheck.siteType !== req.user.siteType) {
+      return res.status(404).json({ message: 'Match not found' });
+    }
     if (runningBet) {
       return res.status(400).json({ message: 'You already have a running bet. Finish it (or submit the result) before joining another.' });
     }
@@ -308,7 +313,7 @@ const joinMatch = async (req, res) => {
     // ── STEP 1: Atomically claim the match ──
     // Only ONE joiner can win this — prevents double-join race condition entirely.
     const match = await LudoMatch.findOneAndUpdate(
-      { _id: matchId, status: 'waiting', creatorId: { $ne: me } },
+      { _id: matchId, status: 'waiting', siteType: req.user.siteType, creatorId: { $ne: me } },
       { $set: { status: 'live', gameStartedAt: new Date(), roomCodeExpiryAt: new Date(Date.now() + ROOM_CODE_EXPIRY_MINUTES * 60 * 1000) } },
       { new: true }
     );
@@ -1447,6 +1452,7 @@ const getWaitingList = async (req, res) => {
   try {
     const list = await LudoMatch.find({
       status: 'waiting',
+      siteType: req.user.siteType,   // never offer another website's battles
       joinExpiryAt: { $gt: new Date() },
       creatorId: { $ne: req.user._id },
     })
@@ -1469,7 +1475,7 @@ const getRunningBattles = async (req, res) => {
     // Take the newest live matches first, then drop the ones that already have a
     // result request. Checking only these ids keeps the query flat as history grows.
     const [candidates, tiers] = await Promise.all([
-      LudoMatch.find({ status: 'live' })
+      LudoMatch.find({ status: 'live', siteType: req.user.siteType })
         .select('_id entryAmount players gameExpiryAt')
         .sort({ gameStartedAt: -1 })
         .limit(80)

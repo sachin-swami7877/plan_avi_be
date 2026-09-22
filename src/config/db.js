@@ -10,6 +10,10 @@ const CONNECT_OPTS = {
   retryWrites: true,
 };
 
+// A site's own cluster is often a smaller tier that can take ten seconds or more
+// to accept the first connection, so it gets a longer window than the main one.
+const SECONDARY_CONNECT_OPTS = { ...CONNECT_OPTS, serverSelectionTimeoutMS: 20000 };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Which database each site uses
 //
@@ -129,27 +133,36 @@ const connectDB = async () => {
         console.log(`[DB] ${envKey} not set — site "${site}" uses the main database (separated by siteType)`);
         continue;
       }
-      connections[site] = mongoose.createConnection(uri, CONNECT_OPTS);
-      // createConnection() is fire-and-forget: a failed initial connection would otherwise be an
-      // unhandled rejection that kills the process. Route it to the awaited asPromise() below.
-      connections[site].asPromise().catch(() => {});
+      const conn = mongoose.createConnection(uri, SECONDARY_CONNECT_OPTS);
+      connections[site] = conn;
       siteDbKey[site] = site;
+
+      // Compile every schema on this connection straight away. It does not need
+      // the socket to be open, and it means populate()/ref lookups can never hit
+      // a MissingSchemaError once traffic starts.
+      for (const name of Object.keys(schemas)) modelOn(conn, name);
+
+      // Deliberately NOT awaited. One site's database being slow or unreachable
+      // must not stop the server from booting for the other sites — that would
+      // take every website down at once. Mongoose keeps retrying by itself, and
+      // queries for this site buffer until it is up.
+      conn.asPromise()
+        .then(async () => {
+          console.log(`MongoDB Connected (${site}): ${conn.host}/${conn.name}`);
+          await runMaintenance(conn, site);
+        })
+        .catch((err) => {
+          console.error(`[DB] site "${site}" database is not reachable: ${err.message}`);
+          console.error(`[DB] the other sites keep serving; "${site}" will recover on its own once the cluster answers.`);
+        });
     }
 
     await mongoose.connect(process.env.MONGODB_URI, CONNECT_OPTS);
     console.log(`MongoDB Connected (main): ${mongoose.connection.host}/${mongoose.connection.name}`);
     await runMaintenance(mongoose.connection, DEFAULT_SITE);
 
-    for (const [key, conn] of Object.entries(connections)) {
-      if (key === 'main') continue;
-      await conn.asPromise();
-      // Compile every registered schema now so populate()/ref lookups on this
-      // connection never hit a MissingSchemaError
-      for (const name of Object.keys(schemas)) modelOn(conn, name);
-      console.log(`MongoDB Connected (${key}): ${conn.host}/${conn.name}`);
-      await runMaintenance(conn, key);
-    }
   } catch (error) {
+    // Only the main database is fatal — without it nothing can be served.
     console.error(`Error: ${error.message}`);
     process.exit(1);
   }
@@ -164,6 +177,7 @@ const disconnectAll = async () => {
 
 module.exports = {
   connectDB,
+  dbKeyForSite,
   disconnectAll,
   runWithSite,
   currentSite,

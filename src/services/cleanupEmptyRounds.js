@@ -1,4 +1,5 @@
 const GameRound = require('../models/GameRound');
+const { runWithSite, distinctDbSites } = require('../config/db');
 const Bet = require('../models/Bet');
 
 const KEEP_EMPTY_ROUNDS = 15;
@@ -30,9 +31,27 @@ async function runCleanupEmptyRounds() {
   }
 }
 
+// Runs once per database, and never on top of itself: a slow sweep must not
+// have a second copy started by the next tick while it is still going.
+let running = false;
+async function runAllDatabases() {
+  if (running) {
+    console.log('[Cleanup] previous run still in progress — skipping this tick');
+    return;
+  }
+  running = true;
+  try {
+    for (const site of distinctDbSites()) {
+      await runWithSite(site, runCleanupEmptyRounds);
+    }
+  } finally {
+    running = false;
+  }
+}
+
 function startCleanupCron() {
-  runCleanupEmptyRounds();
-  setInterval(runCleanupEmptyRounds, CRON_INTERVAL_MS);
+  runAllDatabases();
+  setInterval(runAllDatabases, CRON_INTERVAL_MS);
   console.log(`[Cleanup] Cron started: every 2 hours (keep latest ${KEEP_EMPTY_ROUNDS} empty rounds).`);
 }
 

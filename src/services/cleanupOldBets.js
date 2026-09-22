@@ -1,4 +1,5 @@
 const Bet = require('../models/Bet');
+const { runWithSite, distinctDbSites } = require('../config/db');
 const GameRound = require('../models/GameRound');
 
 const MAX_AGE_DAYS = 31;
@@ -33,11 +34,29 @@ async function runCleanupOldBets() {
   }
 }
 
+// Runs once per database, and never on top of itself: a slow sweep must not
+// have a second copy started by the next tick while it is still going.
+let running = false;
+async function runAllDatabases() {
+  if (running) {
+    console.log('[Cleanup] previous run still in progress — skipping this tick');
+    return;
+  }
+  running = true;
+  try {
+    for (const site of distinctDbSites()) {
+      await runWithSite(site, runCleanupOldBets);
+    }
+  } finally {
+    running = false;
+  }
+}
+
 function startOldBetsCron() {
   // Run immediately on server start
-  runCleanupOldBets();
+  runAllDatabases();
   // Then repeat every 24 hours
-  setInterval(runCleanupOldBets, CRON_INTERVAL_MS);
+  setInterval(runAllDatabases, CRON_INTERVAL_MS);
   console.log(`[Cleanup] Cron started: every 24 hours (delete bets older than ${MAX_AGE_DAYS} days)`);
 }
 

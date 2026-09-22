@@ -58,7 +58,11 @@ const initSocket = (io) => {
 
       socket.user = user;
       socket.user.activeToken = undefined; // don't keep in memory
-      next();
+      // runWithSite() above returned as soon as the query was created, so this
+      // continuation is outside the store again. Re-enter it around next(): the
+      // connection handler (and later the disconnect handler) are scheduled from
+      // here, and they inherit whatever store is active at that moment.
+      runWithSite(socket.siteType, () => next());
     } catch (error) {
       // Allow connection but without auth
       socket.user = null;

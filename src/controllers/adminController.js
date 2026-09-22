@@ -1,4 +1,5 @@
 const { SITE_TYPES } = require('../config/sites');
+const { isMainDb } = require('../config/db');
 const sharp = require('sharp');
 const User = require('../models/User');
 const WalletRequest = require('../models/WalletRequest');
@@ -104,8 +105,10 @@ const getDashboardStats = async (req, res) => {
       }},
     ]);
 
-    // Get commission tiers once (not per match), from this site's settings doc
-    const settings = await getOrCreateSettings(req.query.siteType);
+    // Get commission tiers once (not per match), from this site's settings doc.
+    // siteFromReq (not the raw query param) so an absent param resolves to the
+    // caller's own site instead of creating a stray 'main' document here.
+    const settings = await readSiteSettings(siteFromReq(req));
     const tier1Max = settings?.ludoCommTier1Max ?? 250;
     const tier1Pct = settings?.ludoCommTier1Pct ?? 10;
     const tier2Max = settings?.ludoCommTier2Max ?? 600;
@@ -934,6 +937,8 @@ const getAdminNotifications = async (req, res) => {
 
 const getLiveBets = async (req, res) => {
   try {
+    // The Aviator engine and its rounds live in the main database only
+    if (!isMainDb(req.siteType)) return res.json([]);
     const gameEngine = req.app.get('gameEngine');
     const state = gameEngine.getCurrentState();
     if (!state.round) return res.json([]);
@@ -948,6 +953,7 @@ const getLiveBets = async (req, res) => {
 
 const getCurrentRoundWithBets = async (req, res) => {
   try {
+    if (!isMainDb(req.siteType)) return res.json({ round: null, bets: [] });
     const gameEngine = req.app.get('gameEngine');
     const state = gameEngine.getCurrentState();
     if (!state.round) return res.json({ round: null, state, bets: [] });
@@ -1250,8 +1256,10 @@ const updateSettings = async (req, res) => {
       ludoWarning,
     } = req.body;
 
-    // Handle betsEnabled toggle (game engine + persist to DB)
-    if (typeof betsEnabled === 'boolean') {
+    // Handle betsEnabled toggle (game engine + persist to DB).
+    // There is one in-process Aviator engine and it serves the main database only,
+    // so a site on another database must not be able to pause or resume it.
+    if (typeof betsEnabled === 'boolean' && isMainDb(siteFromReq(req))) {
       const gameEngine = req.app.get('gameEngine');
       gameEngine.setBetsEnabled(betsEnabled);
     }

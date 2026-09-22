@@ -1,5 +1,6 @@
 const AdminSettings = require('../models/AdminSettings');
 const { isSiteType, DEFAULT_SITE } = require('../config/sites');
+const { dbKeyForSite } = require('../config/db');
 
 // Each website keeps its own settings document:
 //   rushkroludo → key 'main' (the original doc), 101dream → '101dream', vk → 'vk'
@@ -28,13 +29,19 @@ const getSiteSettings = async (siteType) => {
   return s;
 };
 
-// Resolve the site a request is talking about: an explicit query/body `siteType`
-// or `type` wins, otherwise the site the request was authenticated for
-// (req.siteType, set by middleware/siteContext.js from the token).
+// Resolve the site a request is talking about. An explicit query/body `siteType`
+// or `type` is honoured, but ONLY for a site that lives in the same database the
+// request was routed to (routing follows the signed token, see middleware/siteContext.js).
+//
+// Without that clamp the key and the connection could disagree: asking for
+// ?type=rushkroludo on a vk-authenticated request would look up — and create —
+// rushkroludo's settings document inside the vk database, and cache it under
+// rushkroludo's key for every other request to read.
 const siteFromReq = (req) => {
+  const own = req.siteType || DEFAULT_SITE;
   const hint = req.query?.siteType || req.query?.type || req.body?.siteType || req.body?.type;
-  if (isSiteType(hint)) return hint;
-  return req.siteType || DEFAULT_SITE;
+  if (!isSiteType(hint)) return own;
+  return dbKeyForSite(hint) === dbKeyForSite(own) ? hint : own;
 };
 
 // ── Read-only cache ──────────────────────────────────────────────────────────
@@ -44,10 +51,15 @@ const siteFromReq = (req) => {
 // from this short-lived cache instead; writers keep using getSiteSettings(),
 // which always returns a live Mongoose document, and invalidate afterwards.
 const CACHE_TTL_MS = 30 * 1000;
-const cache = new Map(); // settings key -> { at, value }
+const cache = new Map(); // "<database>:<settings key>" -> { at, value }
+
+// Two sites can share a settings key across different databases, so the cache
+// entry is identified by the database too — otherwise one site's document could
+// be served to another site's request.
+const cacheKey = (siteType) => `${dbKeyForSite(siteType)}:${keyForSite(siteType)}`;
 
 const readSiteSettings = async (siteType) => {
-  const key = keyForSite(siteType);
+  const key = cacheKey(siteType);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
 
@@ -58,6 +70,6 @@ const readSiteSettings = async (siteType) => {
 };
 
 // Call after saving a settings document so the next read is fresh
-const invalidateSiteSettings = (siteType) => cache.delete(keyForSite(siteType));
+const invalidateSiteSettings = (siteType) => cache.delete(cacheKey(siteType));
 
 module.exports = { getSiteSettings, readSiteSettings, invalidateSiteSettings, keyForSite, siteFromReq };
