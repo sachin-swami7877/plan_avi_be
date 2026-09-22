@@ -5,7 +5,11 @@ const { uploadFromBuffer } = require('../config/cloudinary');
 const { sendPushToAdmins, sendPushNotification } = require('../config/firebase');
 const multer = require('multer');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const { keepSiteContext } = require('../middleware/siteContext');
+
+const rawUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+// Wrapped so the handler after the upload still runs against the right site's database
+const upload = { fields: (...args) => keepSiteContext(rawUpload.fields(...args)) };
 
 // POST /api/user/kyc — submit or resubmit KYC
 const submitKyc = async (req, res) => {

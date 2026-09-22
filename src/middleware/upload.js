@@ -22,4 +22,17 @@ const upload = multer({
   fileFilter
 });
 
-module.exports = upload;
+/*
+ * Every multer middleware is handed out already wrapped in keepSiteContext, so
+ * routes keep calling upload.single(...) / upload.fields(...) unchanged and the
+ * handler after the upload still runs against the right site's database.
+ */
+const { keepSiteContext } = require('./siteContext');
+
+module.exports = {
+  single: (...args) => keepSiteContext(upload.single(...args)),
+  fields: (...args) => keepSiteContext(upload.fields(...args)),
+  array: (...args) => keepSiteContext(upload.array(...args)),
+  none: (...args) => keepSiteContext(upload.none(...args)),
+  any: (...args) => keepSiteContext(upload.any(...args)),
+};

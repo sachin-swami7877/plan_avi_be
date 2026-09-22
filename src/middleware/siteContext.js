@@ -30,4 +30,19 @@ const siteContextMiddleware = (req, res, next) => {
   runWithSite(req.siteType, () => next());
 };
 
-module.exports = { siteContextMiddleware, siteFromRequest };
+/*
+ * Re-enter this request's site context after a middleware that reads the
+ * request body stream (multer and friends).
+ *
+ * The site is carried in an AsyncLocalStorage store. That store follows
+ * promises, but NOT callbacks fired from the incoming request stream: that
+ * stream's async resource was created when the connection arrived, before our
+ * middleware ran, so anything continuing from its 'end' event runs outside our
+ * store. Multer finishes exactly that way, so without this wrapper every
+ * multipart route (deposit screenshots, KYC, Ludo results, admin uploads) fell
+ * back to the default site and wrote to the wrong database.
+ */
+const keepSiteContext = (mw) => (req, res, next) =>
+  mw(req, res, (err) => runWithSite(req.siteType, () => next(err)));
+
+module.exports = { siteContextMiddleware, siteFromRequest, keepSiteContext };
