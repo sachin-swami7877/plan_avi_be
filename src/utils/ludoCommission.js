@@ -1,4 +1,5 @@
-const AdminSettings = require('../models/AdminSettings');
+const { readSiteSettings } = require('./siteSettings');
+const { currentSite } = require('../config/db');
 
 // Default tiers (fallback if settings not found)
 const DEFAULTS = {
@@ -10,12 +11,11 @@ const DEFAULTS = {
 };
 
 /**
- * Get commission tiers from admin settings (cached per call).
+ * Commission tiers for the site this request belongs to. Reading the 'main'
+ * document meant the vk and 101dream admins' tiers were silently ignored.
  */
-async function getCommissionTiers() {
-  const s = await AdminSettings.findOne({ key: 'main' })
-    .select('ludoCommTier1Max ludoCommTier1Pct ludoCommTier2Max ludoCommTier2Pct ludoCommTier3Pct')
-    .lean();
+async function getCommissionTiers(siteType) {
+  const s = await readSiteSettings(siteType || currentSite());
   return {
     tier1Max: s?.ludoCommTier1Max ?? DEFAULTS.ludoCommTier1Max,
     tier1Pct: s?.ludoCommTier1Pct ?? DEFAULTS.ludoCommTier1Pct,

@@ -11,6 +11,7 @@ const {
   checkMatchWaiting,
   checkExpiry,
   getMyMatches,
+  getMyMatchesAll,
   getMatchDetail,
   submitResult,
   submitResultBase64,
@@ -36,6 +37,7 @@ router.post('/check-expiry', checkExpiry);
 router.get('/match/:id/check', checkMatchWaiting);
 router.get('/settings', getLudoSettings);
 router.get('/my-matches', getMyMatches);
+router.get('/my-matches-all', getMyMatchesAll);
 router.get('/match/:id', getMatchDetail);
 router.post('/submit-result', upload.single('screenshot'), submitResult);
 router.post('/submit-result-base64', submitResultBase64);

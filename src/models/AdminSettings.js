@@ -21,6 +21,8 @@ const adminSettingsSchema = new mongoose.Schema({
   // Which support channels the user app shows — WhatsApp is preferred when both are on
   supportWhatsAppEnabled: { type: Boolean, default: true },
   supportTelegramEnabled: { type: Boolean, default: true },
+  // YouTube "how to play" video shown on the user dashboard (empty = button hidden)
+  youtubeUrl: { type: String, default: null },
   // Bonus / Cashback
   bonusMinBet: { type: Number, default: 1000 },
   bonusCashback: { type: Number, default: 100 },

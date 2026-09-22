@@ -1,57 +1,57 @@
 {
   "concepts": {
     "access-control": {
-      "last_audit": "2026-09-21T12:38:35+00:00",
+      "last_audit": "2026-09-22T07:24:56+00:00",
       "mode": "skill-audit",
-      "needs_audit": true,
+      "needs_audit": false,
       "present": true,
       "severity": "block",
       "status": "pass"
     },
     "audit-trail": {
-      "last_audit": "2026-09-21T12:38:35+00:00",
+      "last_audit": "2026-09-22T07:24:56+00:00",
       "mode": "skill-audit",
-      "needs_audit": true,
+      "needs_audit": false,
       "present": true,
       "severity": "block",
       "status": "pass"
     },
     "email-phi-safety": {
-      "last_audit": "2026-09-21T12:38:35+00:00",
+      "last_audit": "2026-09-22T07:24:56+00:00",
       "mode": "skill-audit",
-      "needs_audit": true,
+      "needs_audit": false,
       "present": true,
       "severity": "block",
       "status": "pass"
     },
     "login-throttle": {
-      "last_audit": "2026-09-21T12:38:35+00:00",
+      "last_audit": "2026-09-22T07:24:56+00:00",
       "mode": "skill-audit",
-      "needs_audit": true,
+      "needs_audit": false,
       "present": true,
       "severity": "block",
       "status": "pass"
     },
     "password-hashing": {
-      "last_audit": "2026-09-21T12:38:35+00:00",
+      "last_audit": "2026-09-22T07:24:56+00:00",
       "mode": "skill-audit",
-      "needs_audit": true,
+      "needs_audit": false,
       "present": true,
       "severity": "block",
       "status": "pass"
     },
     "penetration-review": {
-      "last_audit": "2026-09-21T12:38:35+00:00",
+      "last_audit": "2026-09-22T07:24:56+00:00",
       "mode": "skill-audit",
-      "needs_audit": true,
+      "needs_audit": false,
       "present": true,
       "severity": "warn",
       "status": "pass"
     },
     "phi-safe-logging": {
-      "last_audit": "2026-09-21T12:38:35+00:00",
+      "last_audit": "2026-09-22T07:24:56+00:00",
       "mode": "skill-audit",
-      "needs_audit": true,
+      "needs_audit": false,
       "present": true,
       "severity": "block",
       "status": "pass"
@@ -61,5 +61,5 @@
   "full_audit_stale": true,
   "last_full_audit_all": null,
   "repo": "backend",
-  "updated": "2026-09-21T12:38:41+00:00"
+  "updated": "2026-09-22T07:25:03+00:00"
 }

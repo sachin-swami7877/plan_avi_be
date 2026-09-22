@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getPublicSupport, getPublicTerms, getPublicLayout, getPublicUserWarning, getPublicLandingStats, getPublicLogo } = require('../controllers/adminController');
+const { getPublicAppSettings, getPublicSupport, getPublicTerms, getPublicLayout, getPublicUserWarning, getPublicLandingStats, getPublicLogo } = require('../controllers/adminController');
 
 // Public routes (no auth required)
+router.get('/app', getPublicAppSettings);   // one call for logo + warning + youtube + support
 router.get('/support', getPublicSupport);
 router.get('/terms', getPublicTerms);
 router.get('/layout', getPublicLayout);

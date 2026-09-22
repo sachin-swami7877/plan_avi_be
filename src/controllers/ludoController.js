@@ -3,12 +3,13 @@ const User = require('../models/User');
 const LudoMatch = require('../models/LudoMatch');
 const LudoResultRequest = require('../models/LudoResultRequest');
 const Notification = require('../models/Notification');
-const { getSiteSettings } = require('../utils/siteSettings');
+const { readSiteSettings } = require('../utils/siteSettings');
 const { uploadFromBuffer } = require('../config/cloudinary');
 const { calcLudoCommission, getCommissionTiers } = require('../utils/ludoCommission');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 const { creditReferralCommission } = require('../utils/creditReferralCommission');
 const { sendPushToAdmins } = require('../config/firebase');
+const { emitToSite, emitLudoUpdate } = require('../utils/emit');
 
 const ENTRY_MIN = 50;
 const WAITING_EXPIRY_MINUTES = 10;
@@ -81,10 +82,7 @@ async function autoResolveIfPossible(request, match, io) {
       if (io) io.to(`user_${loserPlayer.userId}`).emit('notification:new', loserNotif);
     }
 
-    if (io) {
-      io.emit('ludo:match-live');
-      io.emit('ludo:waiting-updated');
-    }
+    emitLudoUpdate(io, match.siteType);
 
     console.log('[autoResolve] Auto-resolved matchId:', match._id, '| winner:', winner.name, '| amount:', winnerAmount);
     return true;
@@ -110,7 +108,7 @@ const createMatch = async (req, res) => {
 
     // All pre-checks in one round trip (settings are per site — vk has its own document)
     const [adminSettings, user, waitingCount] = await Promise.all([
-      getSiteSettings(req.user.siteType),
+      readSiteSettings(req.user.siteType),
       User.findById(req.user._id).select('name walletBalance'),
       LudoMatch.countDocuments({ creatorId: req.user._id, status: 'waiting' }),
     ]);
@@ -140,7 +138,7 @@ const createMatch = async (req, res) => {
     });
 
     const io = req.app.get('io');
-    io.emit('ludo:waiting-updated');
+    emitToSite(io, req.user.siteType, 'ludo:waiting-updated');
 
     res.status(201).json({
       message: 'Match created. Wait for someone to join.',
@@ -288,7 +286,7 @@ const joinMatch = async (req, res) => {
 
     // Pre-checks (non-atomic) in one round trip — friendly errors before claiming the match
     const [adminSettings, preCheck, runningBet] = await Promise.all([
-      getSiteSettings(req.user.siteType),
+      readSiteSettings(req.user.siteType),
       LudoMatch.findById(matchId).lean(),
       findRunningBet(me),
     ]);
@@ -401,8 +399,7 @@ const joinMatch = async (req, res) => {
     const io = req.app.get('io');
     io.to(`user_${joiner._id}`).emit('wallet:balance-updated', joinerBal);
     io.to(`user_${creator._id}`).emit('wallet:balance-updated', creatorBal);
-    io.emit('ludo:match-live', { matchId: match._id, match: match.toObject ? match.toObject() : match });
-    io.emit('ludo:waiting-updated');
+    emitLudoUpdate(io, req.user.siteType, { matchLive: { matchId: match._id, match: match.toObject ? match.toObject() : match } });
     io.to(`admins_${req.user.siteType || 'rushkroludo'}`).emit('admin:ludo-match-live', { matchId: match._id });
 
     res.json({
@@ -656,10 +653,7 @@ const acceptCancel = async (req, res) => {
     lockReq.refundDecisions = refundDecisions;
     await lockReq.save();
 
-    if (io) {
-      io.emit('ludo:match-live');
-      io.emit('ludo:waiting-updated');
-    }
+    emitLudoUpdate(io, req.user.siteType);
 
     res.json({ message: 'Cancel accepted. Full refund credited to both players.' });
   } catch (error) {
@@ -801,7 +795,7 @@ const cancelMatch = async (req, res) => {
 
       // No refund needed — balance was never deducted at create time
       const io = req.app.get('io');
-      io.emit('ludo:waiting-updated');
+      emitToSite(io, req.user.siteType, 'ludo:waiting-updated');
 
       return res.json({ message: 'Match cancelled.' });
     }
@@ -857,10 +851,7 @@ const cancelMatch = async (req, res) => {
         }
       }
 
-      if (io) {
-        io.emit('ludo:match-live');
-        io.emit('ludo:waiting-updated');
-      }
+      emitLudoUpdate(io, req.user.siteType);
 
       const updatedUser = await User.findById(req.user._id);
       return res.json({
@@ -898,6 +889,56 @@ const checkMatchWaiting = async (req, res) => {
 };
 
 // @desc    Get my matches (waiting / live / history)
+// Ids of this user's matches that are still in play
+const activeMatchIdsFor = async (userId) => {
+  const rows = await LudoMatch.find({
+    $or: [{ creatorId: userId }, { 'players.userId': userId }],
+    status: { $in: ['live', 'cancel_requested'] },
+  }).select('_id').lean();
+  return rows.map((r) => r._id);
+};
+
+// Of the given match ids, the ones that already have a result request
+const resultRequestIdsFor = async (matchIds) => {
+  if (!matchIds || matchIds.length === 0) return [];
+  return LudoResultRequest.distinct('matchId', { matchId: { $in: matchIds } });
+};
+
+// @desc    Every list the Ludo page needs, in one request
+// @route   GET /api/ludo/my-matches-all
+//
+// The page used to call /my-matches four times (waiting, live, requested,
+// history). That was four HTTP round trips from the phone and about ten
+// database queries; this is one request and three.
+const getMyMatchesAll = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const mine = { $or: [{ creatorId: userId }, { 'players.userId': userId }] };
+
+    const [open, history] = await Promise.all([
+      LudoMatch.find({ ...mine, status: { $in: ['waiting', 'live', 'cancel_requested'] } })
+        .sort({ createdAt: -1 }).limit(50).lean(),
+      LudoMatch.find({ ...mine, status: { $in: ['completed', 'cancelled'] } })
+        .sort({ createdAt: -1 }).limit(25).lean(),
+    ]);
+
+    // A match in play is "requested" once a result has been submitted for it
+    const active = open.filter((m) => m.status !== 'waiting');
+    const decided = await resultRequestIdsFor(active.map((m) => m._id));
+    const decidedSet = new Set(decided.map(String));
+
+    res.json({
+      waiting: open.filter((m) => m.status === 'waiting'),
+      live: active.filter((m) => !decidedSet.has(String(m._id))),
+      requested: active.filter((m) => decidedSet.has(String(m._id))),
+      history,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 // @route   GET /api/ludo/my-matches?status=waiting|live|history&page=1&limit=25
 const getMyMatches = async (req, res) => {
   try {
@@ -916,15 +957,17 @@ const getMyMatches = async (req, res) => {
     } else if (status === 'live') {
       // Include both live and cancel_requested (so both players can see and respond)
       query.status = { $in: ['live', 'cancel_requested'] };
-      // Exclude matches that already have a result request (pending admin review)
-      const matchIdsWithResult = await LudoResultRequest.find({}).distinct('matchId');
+      // Exclude matches that already have a result request (pending admin review).
+      // Only this user's own active matches are checked — scanning every result
+      // request in the database grew slower with every match ever played.
+      const matchIdsWithResult = await resultRequestIdsFor(await activeMatchIdsFor(userId));
       if (matchIdsWithResult.length > 0) {
         query._id = { $nin: matchIdsWithResult };
       }
     } else if (status === 'requested') {
       // Matches with a result request (pending admin review) — includes cancel disputes
       query.status = { $in: ['live', 'cancel_requested'] };
-      const matchIdsWithResult = await LudoResultRequest.find({}).distinct('matchId');
+      const matchIdsWithResult = await resultRequestIdsFor(await activeMatchIdsFor(userId));
       if (matchIdsWithResult.length > 0) {
         query._id = { $in: matchIdsWithResult };
       } else {
@@ -1364,8 +1407,7 @@ const cancelAsLoss = async (req, res) => {
     await match.save();
 
     const io = req.app.get('io');
-    io.emit('ludo:match-live');
-    io.emit('ludo:waiting-updated');
+    emitLudoUpdate(io, req.user.siteType);
 
     res.json({
       message: 'You cancelled. No refund. Other player received their entry back.',
@@ -1381,7 +1423,7 @@ const cancelAsLoss = async (req, res) => {
 // @route   GET /api/ludo/settings
 const getLudoSettings = async (req, res) => {
   try {
-    const settings = await getSiteSettings(req.user?.siteType || req.siteType);
+    const settings = await readSiteSettings(req.user?.siteType || req.siteType);
     res.json({
       ludoDummyRunningBattles: settings?.ludoDummyRunningBattles ?? 15,
       ludoCommTier1Max: settings?.ludoCommTier1Max ?? 250,
@@ -1424,21 +1466,19 @@ const getWaitingList = async (req, res) => {
 // @route   GET /api/ludo/running-battles
 const getRunningBattles = async (req, res) => {
   try {
-    // Exclude matches that have result requests (game is over, pending admin review)
-    const matchIdsWithResult = await LudoResultRequest.find({}).distinct('matchId');
-    const liveQuery = { status: 'live' };
-    if (matchIdsWithResult.length > 0) {
-      liveQuery._id = { $nin: matchIdsWithResult };
-    }
-
-    const [list, tiers] = await Promise.all([
-      LudoMatch.find(liveQuery)
+    // Take the newest live matches first, then drop the ones that already have a
+    // result request. Checking only these ids keeps the query flat as history grows.
+    const [candidates, tiers] = await Promise.all([
+      LudoMatch.find({ status: 'live' })
         .select('_id entryAmount players gameExpiryAt')
         .sort({ gameStartedAt: -1 })
-        .limit(50)
+        .limit(80)
         .lean(),
-      getCommissionTiers(),
+      getCommissionTiers(req.user?.siteType),
     ]);
+    const decided = await resultRequestIdsFor(candidates.map((m) => m._id));
+    const decidedSet = new Set(decided.map(String));
+    const list = candidates.filter((m) => !decidedSet.has(String(m._id))).slice(0, 50);
 
     const battles = await Promise.all(list.map(async (m) => {
       const pool = (m.players || []).reduce((s, p) => s + (p.amountPaid || 0), 0) || m.entryAmount * 2;
@@ -1514,7 +1554,7 @@ const checkExpiry = async (req, res) => {
 
     console.log(`[Ludo] Room code expired for match ${match._id} (triggered by client), refunded both`);
 
-    if (io) io.emit('ludo:waiting-updated');
+    emitToSite(io, req.user.siteType, 'ludo:waiting-updated');
 
     res.json({ expired: true, status: 'cancelled' });
   } catch (error) {
@@ -1524,6 +1564,7 @@ const checkExpiry = async (req, res) => {
 };
 
 module.exports = {
+  getMyMatchesAll,
   createMatch,
   submitRoomCode,
   joinMatch,

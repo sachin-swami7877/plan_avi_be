@@ -3,10 +3,11 @@ const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { recordWalletTx } = require('../utils/recordWalletTx');
 const { runWithSite, distinctDbSites } = require('../config/db');
+const { emitToSite } = require('../utils/emit');
 
 const RUN_INTERVAL_MS = 15 * 1000; // every 15 seconds — fast expiry detection
 
-async function expireWaitingMatches(io) {
+async function expireWaitingMatches(io, site) {
   const now = new Date();
   // Find expired IDs first, then atomically claim each one
   const expiredIds = await LudoMatch.find({
@@ -34,15 +35,15 @@ async function expireWaitingMatches(io) {
     console.log(`[Ludo Cron] Expired waiting match ${match._id}, refunded creator`);
 
     if (io) {
-      // Tell ALL clients to remove this match from open battles list instantly
-      io.emit('ludo:match-expired', { matchId: match._id.toString() });
+      // Tell this site's clients to remove the match from their open battles list
+      emitToSite(io, match.siteType, 'ludo:match-expired', { matchId: match._id.toString() });
       // Tell creator their match was cancelled
       io.to(`user_${match.creatorId}`).emit('ludo:match-cancelled', { matchId: match._id.toString() });
     }
   }
 
   if (expiredIds.length > 0 && io) {
-    io.emit('ludo:waiting-updated');
+    emitToSite(io, site, 'ludo:waiting-updated');
   }
 }
 
@@ -109,7 +110,7 @@ function startLudoCron(io) {
   const runAll = async () => {
     for (const site of distinctDbSites()) {
       try {
-        await runWithSite(site, () => expireWaitingMatches(io));
+        await runWithSite(site, () => expireWaitingMatches(io, site));
       } catch (err) {
         console.error(`[Ludo Cron] expireWaitingMatches error (${site}):`, err);
       }

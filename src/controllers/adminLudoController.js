@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const { emitLudoUpdate } = require('../utils/emit');
 const LudoMatch = require('../models/LudoMatch');
 const LudoResultRequest = require('../models/LudoResultRequest');
 const { calcLudoCommission } = require('../utils/ludoCommission');
@@ -210,10 +211,7 @@ const approveLudoResultRequest = async (req, res) => {
       if (io) io.to(`user_${loserPlayer.userId}`).emit('notification:new', loserNotif);
     }
 
-    if (io) {
-      io.emit('ludo:match-live');
-      io.emit('ludo:waiting-updated');
-    }
+    emitLudoUpdate(io, match.siteType);
 
     // Push notification to winner
     if (winner.fcmTokens?.length > 0) {
@@ -362,10 +360,7 @@ const updateLudoMatchStatus = async (req, res) => {
         { matchId: claimed._id, status: 'pending' },
         { status: 'resolved', reviewedBy: req.user._id, reviewedAt: new Date(), adminNote: 'Auto-resolved — match admin-cancelled' }
       );
-      if (io) {
-        io.emit('ludo:waiting-updated');
-        io.emit('ludo:match-live');
-      }
+      emitLudoUpdate(io, claimed.siteType);
       return res.json({ message: shouldRefund ? 'Match cancelled. All players refunded.' : 'Match cancelled. No refund given.', match });
     }
 
@@ -619,8 +614,7 @@ const resolveDispute = async (req, res) => {
       for (const player of match.players) {
         io.to(`user_${player.userId}`).emit('ludo:match-resolved', { matchId: match._id.toString() });
       }
-      io.emit('ludo:match-live');
-      io.emit('ludo:waiting-updated');
+      emitLudoUpdate(io, match.siteType);
     }
 
     res.json({ message: 'Dispute resolved. Players notified.', savedDecisions });

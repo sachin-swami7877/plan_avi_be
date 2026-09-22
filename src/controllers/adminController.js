@@ -17,7 +17,7 @@ const { sendPushNotification } = require('../config/firebase');
 const { getTodayISTStart, istStartOfDay, istEndOfDay } = require('../utils/istDate');
 
 // ──────────────────────── HELPERS ────────────────────────
-const { getSiteSettings, siteFromReq } = require('../utils/siteSettings');
+const { getSiteSettings, readSiteSettings, invalidateSiteSettings, siteFromReq } = require('../utils/siteSettings');
 
 // Site-scoped settings: rushkroludo → 'main' doc, 101dream → '101dream' doc
 async function getOrCreateSettings(siteType) {
@@ -1205,6 +1205,7 @@ const getSettings = async (req, res) => {
       landingPlayers: settings.landingPlayers || '1000+',
       landingWonToday: settings.landingWonToday || '₹1K+',
       userWarning: settings.userWarning || '',
+      youtubeUrl: settings.youtubeUrl || '',
       ludoDummyRunningBattles: settings.ludoDummyRunningBattles ?? 15,
       ludoEnabled: settings.ludoEnabled ?? true,
       ludoDisableReason: settings.ludoDisableReason || '',
@@ -1238,6 +1239,7 @@ const updateSettings = async (req, res) => {
       landingWonToday,
       ludoDummyRunningBattles,
       userWarning,
+      youtubeUrl,
       ludoCommTier1Max, ludoCommTier1Pct,
       ludoCommTier2Max, ludoCommTier2Pct,
       ludoCommTier3Pct,
@@ -1277,6 +1279,7 @@ const updateSettings = async (req, res) => {
       if (n >= 0 && n <= 50) settings.ludoDummyRunningBattles = n;
     }
     if (userWarning !== undefined) settings.userWarning = userWarning;
+    if (youtubeUrl !== undefined) settings.youtubeUrl = String(youtubeUrl || '').trim();
     if (ludoCommTier1Max !== undefined) settings.ludoCommTier1Max = Number(ludoCommTier1Max);
     if (ludoCommTier1Pct !== undefined) settings.ludoCommTier1Pct = Number(ludoCommTier1Pct);
     if (ludoCommTier2Max !== undefined) settings.ludoCommTier2Max = Number(ludoCommTier2Max);
@@ -1289,6 +1292,7 @@ const updateSettings = async (req, res) => {
     if (ludoDisableReason !== undefined) settings.ludoDisableReason = ludoDisableReason;
     if (ludoWarning !== undefined) settings.ludoWarning = ludoWarning;
     await settings.save();
+    invalidateSiteSettings(siteFromReq(req));
 
     res.json({ message: 'Settings updated', betsEnabled: typeof betsEnabled === 'boolean' ? betsEnabled : undefined });
   } catch (error) {
@@ -1315,6 +1319,7 @@ const uploadQrCode = async (req, res) => {
     const settings = await getOrCreateSettings(siteFromReq(req));
     settings.qrCodeUrl = url;
     await settings.save();
+    invalidateSiteSettings(siteFromReq(req));
 
     res.json({ message: 'QR code uploaded', qrCodeUrl: url });
   } catch (error) {
@@ -1339,6 +1344,7 @@ const uploadLogo = async (req, res) => {
     const settings = await getOrCreateSettings(siteFromReq(req));
     settings.logoUrl = url;
     await settings.save();
+    invalidateSiteSettings(siteFromReq(req));
 
     res.json({ message: 'Logo uploaded', logoUrl: url });
   } catch (error) {
@@ -1400,6 +1406,35 @@ const getPublicSupport = async (req, res) => {
       supportWhatsAppEnabled: s.supportWhatsAppEnabled ?? true,
       supportTelegramEnabled: s.supportTelegramEnabled ?? true,
       dummyUserCount: s.dummyUserCount || 10,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Everything the user app needs before it can render (public)
+// @route   GET /api/settings/app
+//
+// The dashboard used to fetch the warning, the logo and the support numbers
+// separately, and the header fetched the logo again. One request now covers all
+// of them, served from the settings cache.
+const getPublicAppSettings = async (req, res) => {
+  try {
+    const s = await readSiteSettings(siteFromReq(req));
+    res.json({
+      logoUrl: s.logoUrl || null,
+      userWarning: s.userWarning || '',
+      youtubeUrl: s.youtubeUrl || '',
+      supportPhone: s.supportPhone || null,
+      supportWhatsApp: s.supportWhatsApp || null,
+      supportTelegram: s.supportTelegram || null,
+      supportWhatsAppEnabled: s.supportWhatsAppEnabled ?? true,
+      supportTelegramEnabled: s.supportTelegramEnabled ?? true,
+      layout: s.layout || false,
+      landingPlayers: s.landingPlayers || '1000+',
+      landingWonToday: s.landingWonToday || '₹1K+',
+      ludoWarning: s.ludoWarning || '',
     });
   } catch (error) {
     console.error(error);
@@ -2139,6 +2174,7 @@ const getAdminCreditLog = async (req, res) => {
 };
 
 module.exports = {
+  getPublicAppSettings,
   getDashboardStats,
   getPendingCounts,
   getUsers,

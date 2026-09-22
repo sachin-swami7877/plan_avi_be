@@ -46,6 +46,16 @@ class GameEngine {
     this.LOSS_RECENT_THRESHOLD = -500; // Trigger loss-recovery only if last-5 loss > ₹500
   }
 
+  /*
+   * Aviator round events go only to sockets that asked for them ('game:subscribe').
+   * Broadcasting them with io.emit() sent a tick to EVERY connected client on all
+   * three websites ten times a second — including the Ludo-only sites, which have
+   * no Aviator screen at all.
+   */
+  gameRoom() {
+    return this.io.to('game');
+  }
+
   /* ═══════════════════════ LIFECYCLE ═══════════════════════ */
 
   async start() {
@@ -210,7 +220,7 @@ class GameEngine {
     this.currentMultiplier = 1.0;
 
     // Broadcast waiting state
-    this.io.emit('game:waiting', {
+    this.gameRoom().emit('game:waiting', {
       roundId,
       countdown: this.WAITING_TIME / 1000,
     });
@@ -466,7 +476,7 @@ class GameEngine {
     this.currentMultiplier = 1.0;
 
     // Broadcast game start
-    this.io.emit('game:start', {
+    this.gameRoom().emit('game:start', {
       roundId: this.currentRound.roundId,
     });
 
@@ -501,7 +511,7 @@ class GameEngine {
         }
 
         // Emit current multiplier (guaranteed below crash target)
-        this.io.emit('game:tick', {
+        this.gameRoom().emit('game:tick', {
           multiplier: Number(this.currentMultiplier.toFixed(2)),
         });
 
@@ -548,7 +558,7 @@ class GameEngine {
 
     // Broadcast crash IMMEDIATELY via socket — before any DB writes
     // so the frontend stops the multiplier display instantly
-    this.io.emit('game:crash', {
+    this.gameRoom().emit('game:crash', {
       roundId: this.currentRound.roundId,
       crashMultiplier: Number(crashMultiplier.toFixed(2)),
     });
@@ -639,7 +649,7 @@ class GameEngine {
     // ── 12-second countdown before next round ──
     for (let sec = this.COUNTDOWN_SECONDS; sec >= 1; sec--) {
       await this.delay(1000);
-      this.io.emit('game:countdown', { secondsLeft: sec });
+      this.gameRoom().emit('game:countdown', { secondsLeft: sec });
     }
   }
 

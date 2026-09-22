@@ -37,4 +37,27 @@ const siteFromReq = (req) => {
   return req.siteType || DEFAULT_SITE;
 };
 
-module.exports = { getSiteSettings, keyForSite, siteFromReq };
+// ── Read-only cache ──────────────────────────────────────────────────────────
+// Settings are read on almost every request (Ludo on/off, commission tiers,
+// support numbers, payment info…). Each read was a round trip to Atlas. Readers
+// that never modify the document use readSiteSettings() and get a plain object
+// from this short-lived cache instead; writers keep using getSiteSettings(),
+// which always returns a live Mongoose document, and invalidate afterwards.
+const CACHE_TTL_MS = 30 * 1000;
+const cache = new Map(); // settings key -> { at, value }
+
+const readSiteSettings = async (siteType) => {
+  const key = keyForSite(siteType);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+
+  const doc = await getSiteSettings(siteType);
+  const value = typeof doc.toObject === 'function' ? doc.toObject() : doc;
+  cache.set(key, { at: Date.now(), value });
+  return value;
+};
+
+// Call after saving a settings document so the next read is fresh
+const invalidateSiteSettings = (siteType) => cache.delete(keyForSite(siteType));
+
+module.exports = { getSiteSettings, readSiteSettings, invalidateSiteSettings, keyForSite, siteFromReq };
